@@ -1,22 +1,109 @@
 // PPIV.cpp : Defines the entry point for the application.
 //
 #include <d3d11.h>
+#include <d3dcompiler.h>
+#include <directxmath.h>
+#include <DirectXColors.h>
 #pragma comment (lib, "d3d11.lib")
 
+#include <vector>
+#include <fstream>
 
 #include "framework.h"
 #include "PPIV.h"
 
+// Including my own vertex and pixel shader headers
+#include "VertexShader.csh"
+#include "PixelShader.csh"
+
+// Texture Loading
+#include "DDSTextureLoader.h"
+
 #define MAX_LOADSTRING 100
 
+using namespace DirectX;
+using namespace std;
+
+// Structs
+
+struct My_Vertex 
+{
+	XMFLOAT3 Pos;
+	XMFLOAT3 Normal;
+	XMFLOAT2 Tex;
+};
+
+struct My_Mesh
+{
+	vector<My_Vertex> vertexList;
+	vector<int> indicesList;
+	FLOAT scale = 50.f;
+};
+
+// VRAM Constant Buffer
+struct ConstantBuffer
+{
+	XMMATRIX mWorld;
+	XMMATRIX mView;
+	XMMATRIX mProjection;
+	XMFLOAT4 vLightDir[2];
+	XMFLOAT4 vLightColor[2];
+	XMFLOAT4 vOutputColor;
+};
+
+
+// funtime random color
+#define RAND_COLOR XMFLOAT4(rand()/float(RAND_MAX),rand()/float(RAND_MAX),rand()/float(RAND_MAX),1.0f)
+
+
+
 // Global DirectX Objects
+
+//Mouse And Keyboard
+
+
+// For init
 ID3D11Device* myDev;
 IDXGISwapChain* mySwap;
 ID3D11DeviceContext* myCon;
+
+// For Drawing 
 ID3D11RenderTargetView* myRtv;
 D3D11_VIEWPORT myPort;
 
-HRESULT InitDevice();
+ID3D11Texture2D* depthStencil;	// z Buffer
+ID3D11DepthStencilView* depthView;
+ID3D11InputLayout* vLayout;		// vertex layout
+ID3D11Buffer* vBuf;				// vertex buffer
+ID3D11Buffer* iBuf;				// Index Buffer
+ID3D11Buffer* cBuf;				// Constant Buffer
+ID3D11VertexShader* vShader;	//HLSL
+ID3D11PixelShader* pShader;		//HLSL
+ID3D11PixelShader* pShader1;		//HLSL
+
+//Texture variables
+
+ID3D11ShaderResourceView* textureRV;
+ID3D11SamplerState* samplLinear;
+
+//Rasterizer
+ID3D11RasterizerState* rState;
+
+//My Meshes
+My_Mesh stairs;
+
+
+
+// Matricies
+
+XMMATRIX WorldMatrix;
+XMMATRIX ViewMatrix;
+XMMATRIX ProjectionMatrix;
+
+// Scaling Things
+float scaleBy = 1.0f;
+
+void LoadMesh(const char*, My_Mesh&);
 void CleanupDevice();
 void Render();
 
@@ -61,15 +148,29 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
     // Main message loop:
     while (msg.message != WM_QUIT) //GetMessage(&msg, nullptr, 0, 0)) not for games / realtime simulations
     {
-		if (FAILED(InitDevice()))
-		{
-			CleanupDevice();
-			return 0;
-		}
 
         if (PeekMessage(&msg, nullptr, 0, 0, PM_REMOVE))
         {
-            TranslateMessage(&msg);
+			if (TranslateMessage(&msg)) 
+			{
+				switch (msg.message)
+				{
+				case WM_KEYDOWN:
+					switch (msg.wParam)
+					{
+					case 'W':
+						scaleBy += 0.2f;
+						break;
+					case 'S':
+						scaleBy -= 0.2f;
+						break;
+					case VK_ESCAPE:
+						msg.message = WM_QUIT;
+						break;
+					}
+				}
+			}
+          
             DispatchMessage(&msg);
 		}
 		else {
@@ -81,10 +182,6 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 
     return (int) msg.wParam;
 }
-
-
-
-
 
 //
 //  FUNCTION: MyRegisterClass()
@@ -124,7 +221,10 @@ ATOM MyRegisterClass(HINSTANCE hInstance)
 //
 BOOL InitInstance(HINSTANCE hInstance, int nCmdShow)
 {
-   hInst = hInstance; // Store instance handle in our global variable
+
+#pragma region Window Things
+
+	hInst = hInstance; // Store instance handle in our global variable
 
    HWND hWnd = CreateWindowW(szWindowClass, szTitle, WS_OVERLAPPEDWINDOW,
       CW_USEDEFAULT, 0, CW_USEDEFAULT, 0, nullptr, nullptr, hInstance, nullptr);
@@ -138,6 +238,7 @@ BOOL InitInstance(HINSTANCE hInstance, int nCmdShow)
    UpdateWindow(hWnd);
 
    // MY CODE
+
    //getting size of the window
    RECT myWinR;
    GetClientRect(hWnd, &myWinR);
@@ -162,27 +263,186 @@ BOOL InitInstance(HINSTANCE hInstance, int nCmdShow)
    hr = D3D11CreateDeviceAndSwapChain( NULL, D3D_DRIVER_TYPE_HARDWARE, NULL, D3D11_CREATE_DEVICE_DEBUG, 
 									   &dx11, 1, D3D11_SDK_VERSION, &swap, &mySwap, &myDev, 0, &myCon);
    if (FAILED(hr))
-	   return false;
+	   return FALSE;
 
    ID3D11Resource* backbuffer;
    hr = mySwap->GetBuffer(0, __uuidof(backbuffer), (void**)&backbuffer);
-
    if (FAILED(hr))
-	   return false;
+	   return FALSE;
 
    myDev->CreateRenderTargetView(backbuffer, NULL, &myRtv);
-   if (FAILED(hr))
-	   return false;
-
    backbuffer->Release();
+   if (FAILED(hr))
+	   return FALSE;
+
+   //Create a depth stencil texture aka a z buffer
+   CD3D11_TEXTURE2D_DESC depthDesc = {};
+   depthDesc.Width = swap.BufferDesc.Width;
+   depthDesc.Height = swap.BufferDesc.Height;
+   depthDesc.MipLevels = 1;
+   depthDesc.ArraySize = 1;
+   depthDesc.Format = DXGI_FORMAT_D32_FLOAT;
+   depthDesc.SampleDesc.Count = 1;
+   depthDesc.SampleDesc.Quality = 0;
+   depthDesc.Usage = D3D11_USAGE_DEFAULT;
+   depthDesc.BindFlags = D3D11_BIND_DEPTH_STENCIL;
+   depthDesc.CPUAccessFlags = 0;
+   depthDesc.MiscFlags = 0;
+   hr = myDev->CreateTexture2D(&depthDesc, nullptr, &depthStencil);
+   if (FAILED(hr))
+	   return FALSE;
+
+   // Create the depth stencil view
+   D3D11_DEPTH_STENCIL_VIEW_DESC descDSV = {};
+   descDSV.Format = depthDesc.Format;
+   descDSV.ViewDimension = D3D11_DSV_DIMENSION_TEXTURE2D;
+   descDSV.Texture2D.MipSlice = 0;
+   hr = myDev->CreateDepthStencilView(depthStencil, &descDSV, &depthView);
+   if (FAILED(hr))
+	   return FALSE;
+
+   myCon->OMSetRenderTargets(1, &myRtv, depthView);
+   
+   // Create a rasterizer state
+   D3D11_RASTERIZER_DESC rasterDesc = {};
+   rasterDesc.FillMode = D3D11_FILL_SOLID;
+   rasterDesc.CullMode = D3D11_CULL_NONE;
+   rasterDesc.AntialiasedLineEnable = TRUE;
+   rasterDesc.MultisampleEnable = TRUE;
+
+   hr = myDev->CreateRasterizerState(&rasterDesc, &rState);
+   if (FAILED(hr))
+	   return FALSE;
+   myCon->RSSetState(rState);
 
    //the viewport
-   myPort.Width = swap.BufferDesc.Width;
-   myPort.Height = swap.BufferDesc.Height;
+   myPort.Width = (FLOAT)swap.BufferDesc.Width;
+   myPort.Height = (FLOAT)swap.BufferDesc.Height;
    myPort.TopLeftX = 0;
    myPort.TopLeftY = 0;
-   myPort.MaxDepth = 0; //ndc depth from 0-1
-   myPort.MinDepth = 1;
+   myPort.MinDepth = 0;
+   myPort.MaxDepth = 1; //ndc depth from 0-1
+
+#pragma endregion
+
+   // Define the input layout
+   D3D11_INPUT_ELEMENT_DESC vDesc[] =
+   {
+	   { "POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, D3D11_APPEND_ALIGNED_ELEMENT, D3D11_INPUT_PER_VERTEX_DATA, 0 },
+	   { "NORMAL",   0, DXGI_FORMAT_R32G32B32_FLOAT, 0, D3D11_APPEND_ALIGNED_ELEMENT, D3D11_INPUT_PER_VERTEX_DATA, 0 },
+	   { "TEXCOORD", 0, DXGI_FORMAT_R32G32_FLOAT,    0, D3D11_APPEND_ALIGNED_ELEMENT, D3D11_INPUT_PER_VERTEX_DATA, 0 },
+   };
+   UINT numElements = ARRAYSIZE(vDesc);
+
+   hr = myDev->CreateInputLayout(vDesc, numElements, VertexShader, sizeof(VertexShader), &vLayout);
+
+   // set the input layout
+   myCon->IASetInputLayout(vLayout);
+#pragma region Shaders
+
+   //vertex and pixel shaders
+   hr = myDev->CreateVertexShader(VertexShader, sizeof(VertexShader), nullptr, &vShader);
+   if (FAILED(hr))
+	   return FALSE;
+
+   //Setting the vertex buffer
+   hr = myDev->CreatePixelShader(PixelShader, sizeof(PixelShader), nullptr, &pShader);
+   if (FAILED(hr))
+	   return FALSE;
+#pragma endregion
+
+#pragma region Mesh Data
+
+   //Importing mesh from binary file
+   LoadMesh("stairs.mesh", stairs);
+
+   // load it onto  the card
+   D3D11_BUFFER_DESC bDesc;
+   ZeroMemory(&bDesc, sizeof(bDesc));
+
+   //setting buffer desc
+   bDesc.BindFlags = D3D11_BIND_VERTEX_BUFFER;
+   bDesc.ByteWidth = sizeof(My_Vertex) * stairs.vertexList.size();
+   bDesc.CPUAccessFlags = 0;
+   bDesc.MiscFlags = 0;
+   bDesc.StructureByteStride = 0;
+   bDesc.Usage = D3D11_USAGE_DEFAULT;
+
+   //setting the subData for the vertex buffer
+   D3D11_SUBRESOURCE_DATA subData;
+   ZeroMemory(&subData, sizeof(subData));
+
+   subData.pSysMem = stairs.vertexList.data();
+   hr = myDev->CreateBuffer(&bDesc, &subData, &vBuf);
+   if (FAILED(hr))
+	   return FALSE;
+
+   // Set vertex buffer
+   UINT stride = sizeof(My_Vertex);
+   UINT offset = 0;
+   myCon->IASetVertexBuffers(0, 1, &vBuf, &stride, &offset);
+
+
+   // Create index Buffer
+   bDesc.Usage = D3D11_USAGE_DEFAULT;
+   bDesc.ByteWidth = sizeof(uint32_t) * stairs.indicesList.size();        // 36 vertices needed for 12 triangles in a triangle list
+   bDesc.BindFlags = D3D11_BIND_INDEX_BUFFER;
+   bDesc.CPUAccessFlags = 0;
+   subData.pSysMem = stairs.indicesList.data();
+   hr = myDev->CreateBuffer(&bDesc, &subData, &iBuf);
+   if (FAILED(hr))
+	   return FALSE;
+
+   // Set index buffer
+   myCon->IASetIndexBuffer(iBuf, DXGI_FORMAT_R32_UINT, 0);
+
+   // Set primitive topology
+   myCon->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+#pragma endregion
+
+#pragma region Texture
+
+
+
+   // Load the Texture
+   hr = CreateDDSTextureFromFile(myDev, L"model.dds", nullptr, &textureRV); // Name of texture
+   if (FAILED(hr))
+	   return FALSE;
+
+   // Create the sample state
+   D3D11_SAMPLER_DESC sDesc = {};
+   sDesc.Filter = D3D11_FILTER_MIN_MAG_MIP_LINEAR;
+   sDesc.AddressU = D3D11_TEXTURE_ADDRESS_WRAP;
+   sDesc.AddressV = D3D11_TEXTURE_ADDRESS_WRAP;
+   sDesc.AddressW = D3D11_TEXTURE_ADDRESS_WRAP;
+   sDesc.ComparisonFunc = D3D11_COMPARISON_NEVER;
+   sDesc.MinLOD = 0;
+   sDesc.MaxLOD = D3D11_FLOAT32_MAX;
+   hr = myDev->CreateSamplerState(&sDesc, &samplLinear);
+   if (FAILED(hr))
+	   return FALSE;
+
+#pragma endregion
+
+   // Create the Constant buffer
+   bDesc.Usage = D3D11_USAGE_DEFAULT;
+   bDesc.ByteWidth = sizeof(ConstantBuffer);
+   bDesc.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
+   bDesc.CPUAccessFlags = 0;
+   hr = myDev->CreateBuffer(&bDesc, nullptr, &cBuf);
+   if (FAILED(hr))
+	   return FALSE;
+
+	   // Initialize the world matrices
+   WorldMatrix = XMMatrixIdentity();
+
+   // Initialize the view matrix
+   XMVECTOR Eye = XMVectorSet(0.0f, 4.0f, -10.0f, 0.0f);
+   XMVECTOR At = XMVectorSet(0.0f, 1.0f, 0.0f, 0.0f);
+   XMVECTOR Up = XMVectorSet(0.0f, 1.0f, 0.0f, 0.0f);
+   ViewMatrix = XMMatrixLookAtLH(Eye, At, Up);
+
+   ProjectionMatrix = XMMatrixPerspectiveFovLH(XM_PIDIV4, swap.BufferDesc.Width / (FLOAT)swap.BufferDesc.Height, 0.01f, 100.0f);
 
    return TRUE;
 }
@@ -247,30 +507,151 @@ INT_PTR CALLBACK About(HWND hDlg, UINT message, WPARAM wParam, LPARAM lParam)
     return (INT_PTR)FALSE;
 }
 
-HRESULT InitDevice()
-{
-	HRESULT hr = S_OK;
+void LoadMesh(const char* meshFileName, My_Mesh& mesh) {
 
-	return S_OK;
+	fstream file(meshFileName, std::ios_base::in | ios_base::binary);
+	assert(file.is_open());
+
+	uint32_t player_index_count;
+	file.read((char*)&player_index_count, sizeof(uint32_t));
+	mesh.indicesList.resize(player_index_count);
+
+	file.read((char*)mesh.indicesList.data(), sizeof(uint32_t) * player_index_count);
+
+	uint32_t player_vertex_count;
+
+	file.read((char*)&player_vertex_count, sizeof(uint32_t));
+	mesh.vertexList.resize(player_vertex_count);
+
+	file.read((char*)mesh.vertexList.data(), sizeof(My_Vertex) * player_vertex_count);
+	file.close();
 }
 
 void CleanupDevice()
 {
 	//release all the D3D11 interfaces
-	myCon->Release();
-	myRtv->Release();
-	myDev->Release();
-	mySwap->Release();
+	if(myCon) myCon->Release();
+	if (samplLinear) samplLinear->Release();
+	if (textureRV) textureRV->Release();
+	if(vBuf) vBuf->Release();
+	if(iBuf) iBuf->Release();
+	if(vLayout) vLayout->Release();
+	if(vShader) vShader->Release();
+	if(pShader) pShader->Release();
+	if(depthStencil) depthStencil->Release();
+	if(myRtv) myRtv->Release();
+	if(depthView) depthView->Release();
+	if(cBuf) cBuf->Release();
+	if(myDev) myDev->Release();
+	if(rState) rState->Release();
+	if(mySwap) mySwap->Release();
 }
 
 void Render()
 {
-	//ID3D11RenderTargetView* tempRtv[] = { myRtv };
-	//myCon->OMSetRenderTargets(1, tempRtv, 0); // z buffer is the third param remove using nullptr
 
-	float color[]{ 0,1,1,1 };
-	myCon->ClearRenderTargetView(myRtv, color);
+	// Update our time
+	static float t = 0.0f;
+	static ULONGLONG timeStart = 0;
+	ULONGLONG timeCur = GetTickCount64();
+	if (timeStart == 0)
+		timeStart = timeCur;
+	t = (timeCur - timeStart) / 1000.0f;
+	// Rotate cube around the origin
+	WorldMatrix = XMMatrixRotationY(t);
 
+	// temp light and colors
+	XMFLOAT4 vLightDirs[2] =
+	{
+		XMFLOAT4(-0.577f, 0.577f, -0.577f, 1.0f),
+		XMFLOAT4(0.0f, 0.0f, -1.0f, 1.0f),
+	};
+	XMFLOAT4 vLightColors[2] =
+	{
+		XMFLOAT4(0.5f, 0.5f, 0.5f, 1.0f),
+		XMFLOAT4(0.5f, 0.0f, 0.0f, 1.0f)
+	};
+
+	// Rotate the second light around the origin
+	XMMATRIX mRotate = XMMatrixRotationY(-2.0f * t);
+	XMVECTOR vLightDir = XMLoadFloat4(&vLightDirs[1]);
+	vLightDir = XMVector3Transform(vLightDir, mRotate);
+	XMStoreFloat4(&vLightDirs[1], vLightDir);
+
+
+	//clear the backbuffer
+	myCon->ClearRenderTargetView(myRtv, Colors::Black);
+
+	//clear the depth buffer to max depth (1.0)
+	myCon->ClearDepthStencilView(depthView, D3D11_CLEAR_DEPTH, 1.0f, 0);
+
+	XMMATRIX scale = {
+	scaleBy, 0.0f, 0.0f, 0.0f,
+	0.0f, scaleBy, 0.0f, 0.0f,
+	0.0f, 0.0f, scaleBy, 0.0f,
+	0.0f, 0.0f, 0.0f, 1.0f
+	};
+
+	// Update matrix variables for the Constant buffer
+	ConstantBuffer cb1;
+	//cb1.mWorld = XMMatrixTranspose( XMMatrixMultiply(scale,WorldMatrix));
+	cb1.mWorld = XMMatrixTranspose(WorldMatrix);
+	//cb1.mView = XMMatrixTranspose(ViewMatrix);
+	cb1.mView = XMMatrixTranspose(XMMatrixMultiply(scale, ViewMatrix));
+	cb1.mProjection = XMMatrixTranspose(ProjectionMatrix);
+	cb1.vLightDir[0] = vLightDirs[0];
+	cb1.vLightDir[1] = vLightDirs[1];
+	cb1.vLightColor[0] = vLightColors[0];
+	cb1.vLightColor[1] = vLightColors[1];
+	cb1.vOutputColor = XMFLOAT4(0, 0, 0, 0);
+	myCon->UpdateSubresource(cBuf, 0, nullptr, &cb1, 0, 0);
+
+	//setting up the pipeline
+	ID3D11RenderTargetView* tempRtv[] = { myRtv };
+	myCon->OMSetRenderTargets(1, tempRtv, depthView); // z buffer is the third param remove using nullptr
+	// rasterizer
+	myCon->RSSetViewports(1, &myPort);
+	// Input Assembler
+	myCon->IASetInputLayout(vLayout);
+
+	//Rendering the Shape
+
+	//Vertex shader stage
+	myCon->VSSetShader(vShader, nullptr, 0);
+	myCon->VSSetConstantBuffers(0, 1, &cBuf);
+
+	//Pixel Shader Stage
+	myCon->PSSetShader(pShader, nullptr, 0);
+	myCon->VSSetConstantBuffers(0, 1, &cBuf);
+
+	//Texture Stage
+	myCon->PSSetShaderResources(0, 1, &textureRV);
+	myCon->PSSetSamplers(0, 1, &samplLinear);
+
+	//Draw Model
+	myCon->DrawIndexed(stairs.indicesList.size(), 0, 0);
+	//myCon->DrawInstanced(mesh.vertexList.size(), 1, 0, 0);
+	
+	// Render each light
+	for (int m = 0; m < 2; m++)
+	{
+		XMMATRIX mLight = XMMatrixTranslationFromVector(5.0f * XMLoadFloat4(&vLightDirs[m]));
+		XMMATRIX mLightScale = XMMatrixScaling(0.5f, 0.5f, 0.5f);
+		mLight = mLightScale * mLight;
+
+		// Update the world variable to reflect the current light
+		cb1.mWorld = XMMatrixTranspose(mLight);
+		cb1.vOutputColor = vLightColors[m];
+		myCon->UpdateSubresource(cBuf, 0, nullptr, &cb1, 0, 0);
+		myCon->PSSetShader(pShader, nullptr, 0);
+		myCon->PSSetConstantBuffers(0, 1, &cBuf);
+		myCon->DrawIndexed(stairs.indicesList.size(), 0, 0);
+		//myCon->DrawInstanced(stairs.vertexList.size(), 1, 0, 0);
+	}
+
+
+
+	// presents the back buffer to the front buffer and should always be last
 	mySwap->Present(0,0);
 
 }

@@ -1,4 +1,2 @@
 ﻿  PPIV.cpp
-C:\Users\Julian\Documents\School\Work\Computer Graphics 2\Project\Project-Portfolio-IV\PPIV\PPIV.cpp(180,34): warning C4244: '=': conversion from 'UINT' to 'FLOAT', possible loss of data
-C:\Users\Julian\Documents\School\Work\Computer Graphics 2\Project\Project-Portfolio-IV\PPIV\PPIV.cpp(181,35): warning C4244: '=': conversion from 'UINT' to 'FLOAT', possible loss of data
   PPIV.vcxproj -> C:\Users\Julian\Documents\School\Work\Computer Graphics 2\Project\Project-Portfolio-IV\PPIV\Debug\PPIV.exe
