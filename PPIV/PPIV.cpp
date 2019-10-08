@@ -6,6 +6,11 @@
 #include <DirectXColors.h>
 #pragma comment (lib, "d3d11.lib")
 
+//Keyboard and Mouse
+#pragma comment (lib, "dinput8.lib")
+#pragma comment (lib, "dxguid.lib")
+#include <dinput.h>
+
 #include <vector>
 #include <fstream>
 
@@ -56,10 +61,27 @@ struct ConstantBuffer
 #define RAND_COLOR XMFLOAT4(rand()/float(RAND_MAX),rand()/float(RAND_MAX),rand()/float(RAND_MAX),1.0f)
 
 
-
 // Global DirectX Objects
 
 //Mouse And Keyboard
+IDirectInputDevice8* DIKey;
+IDirectInputDevice8* DIMouse;
+
+DIMOUSESTATE mouseState;
+LPDIRECTINPUT8 DirectInput;
+
+float moveX;
+float moveY;
+float moveZ;
+
+float rotateX;
+float rotateY;
+
+float speed = 0;
+
+XMMATRIX XRotation;
+XMMATRIX YRotation;
+XMMATRIX camView;
 
 
 // For init
@@ -92,8 +114,6 @@ ID3D11RasterizerState* rState;
 //My Meshes
 My_Mesh stairs;
 
-
-
 // Matricies
 
 XMMATRIX WorldMatrix;
@@ -102,10 +122,26 @@ XMMATRIX ProjectionMatrix;
 
 // Scaling Things
 float scaleBy = 1.0f;
+float sizeScale = 1.0f;
+
+// Timing
+double countSeconds = 0.0;
+__int64 CounterStart = 0;
+__int64 oldFrameTime = 0;
+int frameCount = 0;
+int fps = 0;
+double frameTime;
+double GetTime();
+double GetFrameTime();
+void StartTimer();
+
 
 void LoadMesh(const char*, My_Mesh&);
 void CleanupDevice();
 void Render();
+BOOL InitDirectInput(HINSTANCE hInstance);
+void DetectInput(double time);
+void ZeroCameraValues(void);
 
 
 
@@ -113,6 +149,7 @@ void Render();
 HINSTANCE hInst;                                // current instance
 WCHAR szTitle[MAX_LOADSTRING];                  // The title bar text
 WCHAR szWindowClass[MAX_LOADSTRING];            // the main window class name
+HWND hWnd;
 
 // Forward declarations of functions included in this code module:
 ATOM                MyRegisterClass(HINSTANCE hInstance);
@@ -141,6 +178,13 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
         return FALSE;
     }
 
+	//Initializing Direct Input
+	if (!InitDirectInput(hInstance))
+	{
+		return FALSE;
+	}
+
+
     HACCEL hAccelTable = LoadAccelerators(hInstance, MAKEINTRESOURCE(IDC_PPIV));
 
 	MSG msg = { 0 };
@@ -151,29 +195,20 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 
         if (PeekMessage(&msg, nullptr, 0, 0, PM_REMOVE))
         {
-			if (TranslateMessage(&msg)) 
-			{
-				switch (msg.message)
-				{
-				case WM_KEYDOWN:
-					switch (msg.wParam)
-					{
-					case 'W':
-						scaleBy += 0.2f;
-						break;
-					case 'S':
-						scaleBy -= 0.2f;
-						break;
-					case VK_ESCAPE:
-						msg.message = WM_QUIT;
-						break;
-					}
-				}
-			}
-          
+			TranslateMessage(&msg);
             DispatchMessage(&msg);
 		}
 		else {
+			frameCount++;
+			if (GetTime() > 1.0f)
+			{
+				fps = frameCount;
+				frameCount = 0;
+				StartTimer();
+			}
+
+			frameTime = GetFrameTime();
+			DetectInput(frameTime);
 			Render();
 		}
 
@@ -225,8 +260,7 @@ BOOL InitInstance(HINSTANCE hInstance, int nCmdShow)
 #pragma region Window Things
 
 	hInst = hInstance; // Store instance handle in our global variable
-
-   HWND hWnd = CreateWindowW(szWindowClass, szTitle, WS_OVERLAPPEDWINDOW,
+   hWnd = CreateWindowW(szWindowClass, szTitle, WS_OVERLAPPEDWINDOW,
       CW_USEDEFAULT, 0, CW_USEDEFAULT, 0, nullptr, nullptr, hInstance, nullptr);
 
    if (!hWnd)
@@ -306,7 +340,7 @@ BOOL InitInstance(HINSTANCE hInstance, int nCmdShow)
    // Create a rasterizer state
    D3D11_RASTERIZER_DESC rasterDesc = {};
    rasterDesc.FillMode = D3D11_FILL_SOLID;
-   rasterDesc.CullMode = D3D11_CULL_NONE;
+   rasterDesc.CullMode = D3D11_CULL_BACK;
    rasterDesc.AntialiasedLineEnable = TRUE;
    rasterDesc.MultisampleEnable = TRUE;
 
@@ -440,12 +474,155 @@ BOOL InitInstance(HINSTANCE hInstance, int nCmdShow)
    XMVECTOR Eye = XMVectorSet(0.0f, 4.0f, -10.0f, 0.0f);
    XMVECTOR At = XMVectorSet(0.0f, 1.0f, 0.0f, 0.0f);
    XMVECTOR Up = XMVectorSet(0.0f, 1.0f, 0.0f, 0.0f);
-   ViewMatrix = XMMatrixLookAtLH(Eye, At, Up);
+   ViewMatrix = XMMatrixInverse(nullptr, XMMatrixLookAtLH(Eye, At, Up));
 
    ProjectionMatrix = XMMatrixPerspectiveFovLH(XM_PIDIV4, swap.BufferDesc.Width / (FLOAT)swap.BufferDesc.Height, 0.01f, 100.0f);
 
    return TRUE;
 }
+
+BOOL InitDirectInput(HINSTANCE hInstance)
+{
+	// Initializing the Keyboard and Mouse
+	HRESULT hr;
+	hr = DirectInput8Create(hInstance,
+		DIRECTINPUT_VERSION,
+		IID_IDirectInput8,
+		(void**)&DirectInput,
+		NULL);
+	if (FAILED(hr))
+	{
+		return FALSE;
+	}
+	hr = DirectInput->CreateDevice(GUID_SysKeyboard, &DIKey, NULL);
+	if (FAILED(hr))
+	{
+		return FALSE;
+	}
+	hr = DirectInput->CreateDevice(GUID_SysMouse, &DIMouse, NULL);
+	if (FAILED(hr))
+	{
+		return FALSE;
+	}
+	hr = DIKey->SetDataFormat(&c_dfDIKeyboard);
+	if (FAILED(hr))
+	{
+		return FALSE;
+	}
+	hr = DIKey->SetCooperativeLevel(hWnd, DISCL_FOREGROUND | DISCL_NONEXCLUSIVE);
+	if (FAILED(hr))
+	{
+		return FALSE;
+	}
+	hr = DIMouse->SetDataFormat(&c_dfDIMouse);
+	if (FAILED(hr))
+	{
+		return FALSE;
+	}
+	hr = DIMouse->SetCooperativeLevel(hWnd, DISCL_EXCLUSIVE | DISCL_NOWINKEY | DISCL_FOREGROUND);
+	if (FAILED(hr))
+	{
+		return FALSE;
+	}
+	return TRUE;
+}
+
+#pragma region Time
+
+void StartTimer()
+{
+	LARGE_INTEGER freqCnt;
+	QueryPerformanceFrequency(&freqCnt);
+
+	countSeconds = double(freqCnt.QuadPart);
+	QueryPerformanceCounter(&freqCnt);
+	CounterStart = freqCnt.QuadPart;
+}
+
+double GetTime()
+{
+	LARGE_INTEGER curTime;
+
+	QueryPerformanceCounter(&curTime);
+	return double(curTime.QuadPart - CounterStart) / countSeconds;
+}
+
+double GetFrameTime()
+{
+	LARGE_INTEGER curTime;
+	__int64 tickCount;
+	QueryPerformanceCounter(&curTime);
+	tickCount = curTime.QuadPart - oldFrameTime;
+	oldFrameTime = curTime.QuadPart;
+	if (tickCount < 0.0f)
+		tickCount = 0.0f;
+	return float(tickCount) / countSeconds;
+}
+#pragma endregion
+
+
+void DetectInput(double time)
+{
+	DIMOUSESTATE mouseStateCurr;
+
+	BYTE keyboardState[256];
+
+	DIKey->Acquire();
+	DIMouse->Acquire();
+	DIKey->GetDeviceState(sizeof(keyboardState), (LPVOID)&keyboardState);
+	DIMouse->GetDeviceState(sizeof(DIMOUSESTATE), &mouseStateCurr);
+
+	speed = 5.0f * time;
+
+#pragma region KeyBoard
+
+	if (keyboardState[DIK_ESCAPE] & 0x80)
+		PostMessage(hWnd, WM_DESTROY, 0, 0);
+	if (keyboardState[DIK_W] & 0x80) // move forward
+	{
+		moveZ += speed;
+	}
+	if (keyboardState[DIK_S] & 0x80) // move backwards
+	{
+		moveZ -= speed;
+	}
+	if (keyboardState[DIK_D] & 0x80) // move right
+	{
+		moveX += speed;
+	}
+	if (keyboardState[DIK_A] & 0x80) // move left
+	{
+		moveX -= speed;
+	}
+	if (keyboardState[DIK_Q] & 0x80) // move up
+	{
+		moveY += speed;
+	}
+	if (keyboardState[DIK_E] & 0x80) // move down
+	{
+		moveY -= speed;
+	}
+#pragma endregion
+
+	//Mouse
+	if (mouseStateCurr.lX != mouseState.lX) // Look left and right
+	{
+		rotateY += (mouseStateCurr.lX * 0.005f);
+	}
+	if (mouseStateCurr.lY != mouseState.lY) // Look up and down
+	{
+		rotateX += (mouseStateCurr.lY * 0.005f);
+	}
+
+	mouseState = mouseStateCurr;
+}
+
+void ZeroCameraValues(void)
+{
+	moveZ = moveX = moveY = 0;
+	rotateY = rotateX = 0;
+}
+
 
 //
 //  FUNCTION: WndProc(HWND, UINT, WPARAM, LPARAM)
@@ -524,6 +701,14 @@ void LoadMesh(const char* meshFileName, My_Mesh& mesh) {
 	mesh.vertexList.resize(player_vertex_count);
 
 	file.read((char*)mesh.vertexList.data(), sizeof(My_Vertex) * player_vertex_count);
+
+	for (int i = 0; i < mesh.vertexList.size(); i++)
+	{
+		mesh.vertexList[i].Pos.x *= sizeScale;
+		mesh.vertexList[i].Pos.y *= sizeScale;
+		mesh.vertexList[i].Pos.z *= sizeScale;
+	}
+
 	file.close();
 }
 
@@ -545,6 +730,9 @@ void CleanupDevice()
 	if(myDev) myDev->Release();
 	if(rState) rState->Release();
 	if(mySwap) mySwap->Release();
+	if (DirectInput) DirectInput->Release();
+	if (DIKey) DIKey->Unacquire();
+	if (DIMouse) DIMouse->Unacquire();
 }
 
 void Render()
@@ -558,7 +746,7 @@ void Render()
 		timeStart = timeCur;
 	t = (timeCur - timeStart) / 1000.0f;
 	// Rotate cube around the origin
-	WorldMatrix = XMMatrixRotationY(t);
+	//WorldMatrix = XMMatrixRotationY(t);
 
 	// temp light and colors
 	XMFLOAT4 vLightDirs[2] =
@@ -568,12 +756,12 @@ void Render()
 	};
 	XMFLOAT4 vLightColors[2] =
 	{
-		XMFLOAT4(0.5f, 0.5f, 0.5f, 1.0f),
-		XMFLOAT4(0.5f, 0.0f, 0.0f, 1.0f)
+		XMFLOAT4(Colors::White),
+		XMFLOAT4(Colors::Blue)
 	};
 
 	// Rotate the second light around the origin
-	XMMATRIX mRotate = XMMatrixRotationY(-2.0f * t);
+	XMMATRIX mRotate = XMMatrixRotationY(-1.0f * t);
 	XMVECTOR vLightDir = XMLoadFloat4(&vLightDirs[1]);
 	vLightDir = XMVector3Transform(vLightDir, mRotate);
 	XMStoreFloat4(&vLightDirs[1], vLightDir);
@@ -585,19 +773,25 @@ void Render()
 	//clear the depth buffer to max depth (1.0)
 	myCon->ClearDepthStencilView(depthView, D3D11_CLEAR_DEPTH, 1.0f, 0);
 
-	XMMATRIX scale = {
-	scaleBy, 0.0f, 0.0f, 0.0f,
-	0.0f, scaleBy, 0.0f, 0.0f,
-	0.0f, 0.0f, scaleBy, 0.0f,
-	0.0f, 0.0f, 0.0f, 1.0f
-	};
+	// Moving the view with key and mouse
+
+	XRotation = XMMatrixRotationX(rotateX);
+	YRotation = XMMatrixRotationY(rotateY);
+
+	XMMATRIX translation = XMMatrixTranslation(moveX, moveY, moveZ);
+	ViewMatrix = XMMatrixMultiply(translation, ViewMatrix);
+	XMVECTOR pos = ViewMatrix.r[3];
+	ViewMatrix.r[3] = XMVectorSet(0, 0, 0, 1.0f);
+	ViewMatrix = XMMatrixMultiply(XRotation, ViewMatrix);
+	ViewMatrix = XMMatrixMultiply(ViewMatrix, YRotation);
+	ViewMatrix.r[3] = pos;
+
+	ZeroCameraValues();
 
 	// Update matrix variables for the Constant buffer
 	ConstantBuffer cb1;
-	//cb1.mWorld = XMMatrixTranspose( XMMatrixMultiply(scale,WorldMatrix));
 	cb1.mWorld = XMMatrixTranspose(WorldMatrix);
-	//cb1.mView = XMMatrixTranspose(ViewMatrix);
-	cb1.mView = XMMatrixTranspose(XMMatrixMultiply(scale, ViewMatrix));
+	cb1.mView = XMMatrixTranspose(XMMatrixInverse(nullptr, ViewMatrix));
 	cb1.mProjection = XMMatrixTranspose(ProjectionMatrix);
 	cb1.vLightDir[0] = vLightDirs[0];
 	cb1.vLightDir[1] = vLightDirs[1];
@@ -635,8 +829,8 @@ void Render()
 	// Render each light
 	for (int m = 0; m < 2; m++)
 	{
-		XMMATRIX mLight = XMMatrixTranslationFromVector(5.0f * XMLoadFloat4(&vLightDirs[m]));
-		XMMATRIX mLightScale = XMMatrixScaling(0.5f, 0.5f, 0.5f);
+		XMMATRIX mLight = XMMatrixTranslationFromVector(2.0f * XMLoadFloat4(&vLightDirs[m]));
+		XMMATRIX mLightScale = XMMatrixScaling(0.8f, 0.8f, 0.8f);
 		mLight = mLightScale * mLight;
 
 		// Update the world variable to reflect the current light
@@ -648,8 +842,6 @@ void Render()
 		myCon->DrawIndexed(stairs.indicesList.size(), 0, 0);
 		//myCon->DrawInstanced(stairs.vertexList.size(), 1, 0, 0);
 	}
-
-
 
 	// presents the back buffer to the front buffer and should always be last
 	mySwap->Present(0,0);
