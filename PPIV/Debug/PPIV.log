@@ -1,6 +1,6 @@
 ﻿  PPIV.cpp
   C:\Program Files (x86)\Windows Kits\10\Include\10.0.18362.0\um\dinput.h: DIRECTINPUT_VERSION undefined. Defaulting to version 0x0800
-C:\Users\Julian\Documents\School\Work\Computer Graphics 2\Project\Project-Portfolio-IV\PPIV\PPIV.cpp(558,15): warning C4244: '=': conversion from 'float' to '__int64', possible loss of data
-C:\Users\Julian\Documents\School\Work\Computer Graphics 2\Project\Project-Portfolio-IV\PPIV\PPIV.cpp(575,15): warning C4244: '=': conversion from 'double' to 'float', possible loss of data
-C:\Users\Julian\Documents\School\Work\Computer Graphics 2\Project\Project-Portfolio-IV\PPIV\PPIV.cpp(705,20): warning C4018: '<': signed/unsigned mismatch
+C:\Users\Julian\Documents\School\Work\Computer Graphics 2\Project\Project-Portfolio-IV\PPIV\PPIV.cpp(557,15): warning C4244: '=': conversion from 'float' to '__int64', possible loss of data
+C:\Users\Julian\Documents\School\Work\Computer Graphics 2\Project\Project-Portfolio-IV\PPIV\PPIV.cpp(574,15): warning C4244: '=': conversion from 'double' to 'float', possible loss of data
+C:\Users\Julian\Documents\School\Work\Computer Graphics 2\Project\Project-Portfolio-IV\PPIV\PPIV.cpp(704,20): warning C4018: '<': signed/unsigned mismatch
   PPIV.vcxproj -> C:\Users\Julian\Documents\School\Work\Computer Graphics 2\Project\Project-Portfolio-IV\PPIV\Debug\PPIV.exe

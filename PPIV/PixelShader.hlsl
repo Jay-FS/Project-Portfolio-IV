@@ -1,5 +1,7 @@
 
 Texture2D txDiffuse : register(t0);
+Texture2D txAO : register(t1);
+Texture2D txNM : register(t2);
 SamplerState samLinear : register(s0);
 
 struct PS_INPUT
@@ -37,7 +39,9 @@ float4 main(PS_INPUT input) : SV_TARGET
     
 
 	finalColor *= txDiffuse.Sample(samLinear, input.Tex);
-	finalColor.a = 1;
+    float4 AO = txAO.Sample(samLinear, input.Tex);
+    float4 NM = txNM.Sample(samLinear, input.Tex);
+    finalColor.a = 1; //NM.a;
 	return finalColor;
 }
 

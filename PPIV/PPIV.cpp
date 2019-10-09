@@ -62,6 +62,7 @@ struct ConstantBuffer
 
 
 // Global DirectX Objects
+const char* meshName = "stump.mesh";
 
 //Mouse And Keyboard
 IDirectInputDevice8* DIKey;
@@ -106,6 +107,8 @@ ID3D11PixelShader* pShader1;		//HLSL
 //Texture variables
 
 ID3D11ShaderResourceView* textureRV;
+ID3D11ShaderResourceView* textureRVAO; // ambient oclusion
+ID3D11ShaderResourceView* textureRVNM; // Normal Map
 ID3D11SamplerState* samplLinear;
 
 //Rasterizer
@@ -388,7 +391,7 @@ BOOL InitInstance(HINSTANCE hInstance, int nCmdShow)
 #pragma region Mesh Data
 
    //Importing mesh from binary file
-   LoadMesh("stairs.mesh", stairs);
+   LoadMesh(meshName, stairs);
 
    // load it onto  the card
    D3D11_BUFFER_DESC bDesc;
@@ -436,16 +439,20 @@ BOOL InitInstance(HINSTANCE hInstance, int nCmdShow)
 
 #pragma region Texture
 
-
-
    // Load the Texture
-   hr = CreateDDSTextureFromFile(myDev, L"model.dds", nullptr, &textureRV); // Name of texture
+   hr = CreateDDSTextureFromFile(myDev, L"stumpNM.dds", nullptr, &textureRV); // Name of texture
+   if (FAILED(hr))
+	   return FALSE;
+   hr = CreateDDSTextureFromFile(myDev, L"stumpAO.dds", nullptr, &textureRVAO); // Name of texture
+   if (FAILED(hr))
+	   return FALSE;
+   hr = CreateDDSTextureFromFile(myDev, L"stump.dds", nullptr, &textureRVNM); // Name of texture
    if (FAILED(hr))
 	   return FALSE;
 
    // Create the sample state
    D3D11_SAMPLER_DESC sDesc = {};
-   sDesc.Filter = D3D11_FILTER_MIN_MAG_MIP_LINEAR;
+   sDesc.Filter = D3D11_FILTER_ANISOTROPIC;
    sDesc.AddressU = D3D11_TEXTURE_ADDRESS_WRAP;
    sDesc.AddressV = D3D11_TEXTURE_ADDRESS_WRAP;
    sDesc.AddressW = D3D11_TEXTURE_ADDRESS_WRAP;
@@ -455,7 +462,7 @@ BOOL InitInstance(HINSTANCE hInstance, int nCmdShow)
    hr = myDev->CreateSamplerState(&sDesc, &samplLinear);
    if (FAILED(hr))
 	   return FALSE;
-
+ 
 #pragma endregion
 
    // Create the Constant buffer
@@ -718,6 +725,8 @@ void CleanupDevice()
 	if(myCon) myCon->Release();
 	if (samplLinear) samplLinear->Release();
 	if (textureRV) textureRV->Release();
+	if (textureRVAO) textureRVAO->Release();
+	if (textureRVNM) textureRVNM->Release();
 	if(vBuf) vBuf->Release();
 	if(iBuf) iBuf->Release();
 	if(vLayout) vLayout->Release();
@@ -820,6 +829,8 @@ void Render()
 
 	//Texture Stage
 	myCon->PSSetShaderResources(0, 1, &textureRV);
+	myCon->PSSetShaderResources(0, 1, &textureRVAO);
+	myCon->PSSetShaderResources(0, 1, &textureRVNM);
 	myCon->PSSetSamplers(0, 1, &samplLinear);
 
 	//Draw Model
@@ -839,7 +850,7 @@ void Render()
 		myCon->UpdateSubresource(cBuf, 0, nullptr, &cb1, 0, 0);
 		myCon->PSSetShader(pShader, nullptr, 0);
 		myCon->PSSetConstantBuffers(0, 1, &cBuf);
-		myCon->DrawIndexed(stairs.indicesList.size(), 0, 0);
+		//myCon->DrawIndexed(stairs.indicesList.size(), 0, 0);
 		//myCon->DrawInstanced(stairs.vertexList.size(), 1, 0, 0);
 	}
 
