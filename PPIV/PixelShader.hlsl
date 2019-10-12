@@ -10,60 +10,57 @@ struct PS_INPUT
 	float3 Norm : NORMAL;
 	float2 Tex : TEXCOORD0;
     float3 worldPos : POSITION;
+    float4 Tan : TANGENT;
+    float4 Binorm : BINORMAL;
+
 };
 
-cbuffer ConstantBuffer : register(b0)
+cbuffer LightBuffer : register(b0)
 {
-	matrix World;
-	matrix View;
-	matrix Projection;
-	float4 vLightDir[2];
-	float4 vLightColor[2];
-	float4 vOutputColor;
+    float4 lightDir[2];
+    float4 lightColor[2];
+    float2 lightRadius;
+    float coneSize;
+    float coneRange;
 }
 
 float4 main(PS_INPUT input) : SV_TARGET
 {
 	float4 finalColor = (float4)0;
-    float4 lightRadius = (float4)0;
-    float4 attenuation = (float4)0;
-    lightRadius = 1;
+    int numLights = 2;
 	finalColor = 0;		
-	//do NdotL lighting for 2 lights
-    finalColor += saturate(dot((float3) vLightDir[0], input.Norm) * vLightColor[0]);
-    finalColor += saturate(dot((float3) vLightDir[1], input.Norm) * vLightColor[1]);
 
-    //attenuation = 1.0f - saturate(length(((float3) vLightDir[1]) - input.worldPos) / lightRadius);
-    //finalColor += saturate(dot((float3) vLightDir[1], input.Norm)) * vLightColor[1] * attenuation;
-    
-    
 
-	finalColor *= txDiffuse.Sample(samLinear, input.Tex);
-    float4 AO = txAO.Sample(samLinear, input.Tex);
+    // NORMAL MAPPING
     float4 NM = txNM.Sample(samLinear, input.Tex);
-    finalColor.a = 1; //NM.a;
+
+    NM = (2.0f * NM) - 1.0f;
+    // making the tan orthogonal to the normal
+    float3 newTan = normalize((float3) input.Tan - (dot((float3) input.Tan, input.Norm) * input.Norm));
+    float3x3 texSpace = float3x3(newTan, (float3) input.Binorm, input.Norm);
+    float3 newNorm = saturate(mul((float1x3) NM, texSpace));
+
+    //LIGHTING
+
+
+    //attenuation = 1.0 - saturate(length(lightDir - input.worldPos) / lightRadius);
+    for (int i = 0; i < numLights; i++)
+    {
+    // Point Light
+        float3 lightDirection = normalize(lightDir[i].xyz - input.worldPos);
+        float4 lightRatio = saturate(dot(lightDirection, newNorm));
+        finalColor = lightRatio * lightColor[i];
+
+
+	//directional light
+        finalColor += saturate(dot((float3) lightDir[i], newNorm)) * lightColor[i]; // * attenuation;
+    
+    }
+    //FINAL TEXTURE AND AO
+	finalColor *= txDiffuse.Sample(samLinear, input.Tex);
+    float4 AO = txAO.Sample(samLinear, input.Tex); 
+    finalColor *= AO;
+
 	return finalColor;
 }
 
-//SAMPLE PIXEL SHADER
-
-////Pixel Shader Performing multi)texturing with detail texture on a second uv channel
-//texture2D baseTexture : register(t0); // first texture
-//texture2D detailTexture : register(t1); // second texture
-//SamplerState filters[2] : register(s0); // filter 0 using clamp, filter 1 using wrap
-//float4 main(float2 baseUV : TEXCOORD0, float2 detailUV : TEXCOORD1, float4 modulate : COLOR) : SV_TARGET
-//{
-//    float4 baseColor = baseTexture.Sample(filters[0], baseUV) * modulate; // get base color
-//    float4 detailColor = detailTexture.Sample(filters[1], detailUV); // get detail effect
-//    float4 finalColor = float4(lerp(baseColor.rgb, detailColor.rgb, detailColor.a), baseColor.a);
-//    return finalColor; // return a transition based on the detail alpha
-//}
-
-
-//--------------------------------------------------------------------------------------
-// PSSolid - render a solid color
-//--------------------------------------------------------------------------------------
-float4 PSSolid(PS_INPUT input) : SV_Target
-{
-	return vOutputColor;
-}
