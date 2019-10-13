@@ -64,11 +64,12 @@ struct ConstantBuffer
 //Lighting Constant Buffer
 struct LightBuffer
 {
-	XMFLOAT4* lightDir;
-	XMFLOAT4* lightColor;
-	XMFLOAT4 lightRadius;
+	XMFLOAT4 lightDir[2];
+	XMFLOAT4 lightColor[2];
+	float coneDir;
 	float coneSize;
 	float coneRange;
+	float coneRatio;
 };
 
 
@@ -786,7 +787,6 @@ void CleanupDevice()
 
 void Render()
 {
-
 	// Update our time
 	static float t = 0.0f;
 	static ULONGLONG timeStart = 0;
@@ -802,7 +802,7 @@ void Render()
 
 	//clear the depth buffer to max depth (1.0)
 	myCon->ClearDepthStencilView(depthView, D3D11_CLEAR_DEPTH, 1.0f, 0);
-
+#pragma region Mouse and Keyboard
 	// Moving the view with key and mouse
 
 	XRotation = XMMatrixRotationX(rotateX);
@@ -817,6 +817,7 @@ void Render()
 	ViewMatrix.r[3] = pos;
 
 	ZeroCameraValues();
+#pragma endregion
 
 	// Update matrix variables for the Constant buffer
 	ConstantBuffer cb1;
@@ -861,40 +862,47 @@ void Render()
 
 #pragma region Lights
 
-	int numLights = 2;
+	const int numLights = 2;
 	// temp light and colors
-	XMFLOAT4 vLightDirs[2] =
+	XMFLOAT4 vLightDirs[numLights] =
 	{
 		XMFLOAT4(0.0f, 0.0f, -1.0f, 1.0f),
 		XMFLOAT4(-0.577f, 0.577f, -0.577f, 1.0f),
 	};
-	XMFLOAT4 vLightColors[2] =
+	XMFLOAT4 vLightColors[numLights] =
 	{
 		XMFLOAT4(Colors::White),
-		XMFLOAT4(Colors::Blue),
+		XMFLOAT4(Colors::White),
 	};
 
 	// Rotate the second light around the origin
-	XMMATRIX mRotate = XMMatrixRotationY(-1.0f * 1);
+	XMMATRIX mRotate = XMMatrixRotationY(-1.0f * t);
 	XMVECTOR vLightDir = XMLoadFloat4(&vLightDirs[0]);
 	vLightDir = XMVector3Transform(vLightDir, mRotate);
 	XMStoreFloat4(&vLightDirs[0], vLightDir);
 
 
 	// Update matrix vars for the Light Buffer
-	XMMATRIX mLight = XMMatrixTranslationFromVector(2.0f * XMLoadFloat4(&vLightDirs[0]));
+	XMMATRIX mLight = XMMatrixTranslationFromVector(1.0f * XMLoadFloat4(&vLightDirs[0]));
 	XMMATRIX mLightScale = XMMatrixScaling(0.8f, 0.8f, 0.8f);
 	mLight = mLightScale * mLight;
 
+	//setting rotation
+	cb1.mWorld = XMMatrixTranspose(mLight);
+	myCon->UpdateSubresource(cBuf, 0, nullptr, &cb1, 0, 0);
+	
 	LightBuffer lb1 = {};
-	for (int i = 0; i < numLights; i++)
-	{
-		lb1.lightColor[i] = vLightColors[i];
-		lb1.lightDir[i] = vLightDirs[i];
-	}
+	lb1.lightDir[0] = vLightDirs[0];		
+	lb1.lightDir[1] = vLightDirs[1];
+	lb1.lightColor[0] = vLightColors[0];
+	lb1.lightColor[1] = vLightColors[1];
+	lb1.coneRange = 10.0f;
+	lb1.coneSize = 2.0f;
+	lb1.coneRatio = 0.0f;
 	myCon->UpdateSubresource(lBuf, 0, nullptr, &lb1, 0, 0);
 	myCon->PSSetShader(pShader, nullptr, 0);
 	myCon->PSSetConstantBuffers(0, 1, &lBuf);
+
 	//myCon->DrawIndexed(stairs.indicesList.size(), 0, 0); // Show model
 
 #pragma endregion

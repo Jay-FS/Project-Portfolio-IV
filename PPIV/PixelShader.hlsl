@@ -19,9 +19,10 @@ cbuffer LightBuffer : register(b0)
 {
     float4 lightDir[2];
     float4 lightColor[2];
-    float2 lightRadius;
     float coneSize;
+    float coneDir;
     float coneRange;
+    float coneRatio;
 }
 
 float4 main(PS_INPUT input) : SV_TARGET
@@ -30,7 +31,7 @@ float4 main(PS_INPUT input) : SV_TARGET
     int numLights = 2;
 	finalColor = 0;		
 
-
+    
     // NORMAL MAPPING
     float4 NM = txNM.Sample(samLinear, input.Tex);
 
@@ -42,23 +43,37 @@ float4 main(PS_INPUT input) : SV_TARGET
 
     //LIGHTING
 
-
+    //Fall off by radius
     //attenuation = 1.0 - saturate(length(lightDir - input.worldPos) / lightRadius);
+
+    //Fall off by Cone Edge
+    //attenuation = 1.0 - saturate(innerConeRatio - surfaceRatio) / innerConeRatio - outerConeRatio));
+    
+    //Make Attenuation quadratic
+    //attenuation *= attenuation;
+        
     for (int i = 0; i < numLights; i++)
     {
-    // Point Light
-        float3 lightDirection = normalize(lightDir[i].xyz - input.worldPos);
-        float4 lightRatio = saturate(dot(lightDirection, newNorm));
-        finalColor = lightRatio * lightColor[i];
+	    //Directional light
+        float3 newDir = -normalize(-lightDir[i]); // normalize the light direction
+        finalColor += saturate(dot( newDir, newNorm)) * lightColor[i]; // * attenuation;
+        
+        //Point Light
+        //float3 lightDirection = normalize(lightDir[i].xyz - input.worldPos);
+        //float4 lightRatio = saturate(dot(lightDirection, newNorm));
+        //finalColor = lightRatio * lightColor[i];
 
-
-	//directional light
-        finalColor += saturate(dot((float3) lightDir[i], newNorm)) * lightColor[i]; // * attenuation;
-    
+        //Spot Light
+        //float3 newDir = normalize(lightDir[i].xyz - input.worldPos);
+        //float surfaceRatio = saturate(dot(-newDir, coneDir));
+        //float spotFactor = (surfaceRatio > coneRatio) ? 1 : 0;
+        //float lightRatio = saturate(dot(newDir, newNorm));
+        //finalColor = spotFactor * lightRatio * lightColor[i];
+        
     }
     //FINAL TEXTURE AND AO
-	finalColor *= txDiffuse.Sample(samLinear, input.Tex);
     float4 AO = txAO.Sample(samLinear, input.Tex); 
+	finalColor *= txDiffuse.Sample(samLinear, input.Tex);
     finalColor *= AO;
 
 	return finalColor;
