@@ -13,6 +13,7 @@
 #include <dinput.h>
 
 #include <vector>
+#include <random>
 #include <fstream>
 
 #include "framework.h"
@@ -21,6 +22,7 @@
 // Including shader headers
 #include "VertexShader.csh"
 #include "PixelShader.csh"
+#include "GrassPixelShader.csh"
 #include "GeometryShader.csh"
 
 // Texture Loading
@@ -33,7 +35,7 @@ using namespace std;
 
 #pragma endregion
 
-#pragma region Variables
+
 
 // Structs
 
@@ -60,26 +62,38 @@ struct ConstantBuffer
 	XMMATRIX mProjection;
 };
 
-
 //Lighting Constant Buffer
 struct LightBuffer
 {
 	XMFLOAT4 lightDir[2];
-	XMFLOAT4 lightColor[2];
-	float coneDir;
-	float coneSize;
-	float coneRange;
-	float coneRatio;
+	XMFLOAT4 lightColor[4];
+	XMFLOAT4 lightPos;
+	FLOAT lightRadius;
+	XMFLOAT3 padding;
+	XMFLOAT4 coneDir;
+	FLOAT coneSize;
+	FLOAT coneRatio;
+	FLOAT innerConeRatio;
+	FLOAT outerConeRatio;
+	//BOOL hasNM;
+};
+
+//Instancing Constant Buffer
+struct InstanceBuffer
+{
+	XMMATRIX positions[25];
 };
 
 
-
+#pragma region Variables
 // funtime random color
 #define RAND_COLOR XMFLOAT4(rand()/float(RAND_MAX),rand()/float(RAND_MAX),rand()/float(RAND_MAX),1.0f)
 
-
 // Global DirectX Objects
 const char* meshName = "stumpTanBinorm.mesh";
+const char* meshName2 = "LightBulb.mesh";
+const char* meshName3 = "UvReverseCube.mesh";
+const char* meshName4 = "GrassPlane.mesh";
 
 //Mouse And Keyboard
 IDirectInputDevice8* DIKey;
@@ -115,12 +129,19 @@ ID3D11Texture2D* depthStencil;	// z Buffer
 ID3D11DepthStencilView* depthView;
 ID3D11InputLayout* vLayout;		// vertex layout
 ID3D11Buffer* vBuf;				// vertex buffer
+ID3D11Buffer* vBufLight;		// vertex buffer for lightbulb
+ID3D11Buffer* vBufCube;			// vertex buffer for cube / skybox
+ID3D11Buffer* vBufGrassPlane;	// vertex buffer for grass plane
 ID3D11Buffer* iBuf;				// Index Buffer
+ID3D11Buffer* iBufLight;		// Index Buffer for lightbulb
+ID3D11Buffer* iBufCube;			// Index Buffer for cube / skybox
+ID3D11Buffer* iBufGrassPlane;	// Index Buffer for grass planen
 ID3D11Buffer* cBuf;				// Constant Buffer
 ID3D11Buffer* lBuf;				// Light Buffer
+ID3D11Buffer* instBuf;			// Instance Buffer
 ID3D11VertexShader* vShader;	//HLSL
 ID3D11PixelShader* pShader;		//HLSL
-ID3D11PixelShader* pShader1;	//HLSL
+ID3D11PixelShader* pShaderGrass;//HLSL
 ID3D11GeometryShader* gShader;  //HLSL
 
 //Texture variables
@@ -128,13 +149,18 @@ ID3D11GeometryShader* gShader;  //HLSL
 ID3D11ShaderResourceView* textureRV;
 ID3D11ShaderResourceView* textureRVAO; // ambient oclusion
 ID3D11ShaderResourceView* textureRVNM; // Normal Map
+ID3D11ShaderResourceView* textureSky; // SkyBox
+ID3D11ShaderResourceView* textureGrass; // Grass
 ID3D11SamplerState* samplLinear;
 
 //Rasterizer
 ID3D11RasterizerState* rState;
 
 //My Meshes
-My_Mesh stairs;
+My_Mesh stump;
+My_Mesh lightBulb;
+My_Mesh Skybox;
+My_Mesh GrassPlane;
 
 // Matricies
 
@@ -157,7 +183,7 @@ double GetFrameTime();
 void StartTimer();
 
 
-void LoadMesh(const char*, My_Mesh&);
+void LoadMesh(const char*, My_Mesh&, float);
 void CleanupDevice();
 void Render();
 BOOL InitDirectInput(HINSTANCE hInstance);
@@ -406,8 +432,11 @@ BOOL InitInstance(HINSTANCE hInstance, int nCmdShow)
 	if (FAILED(hr))
 		return FALSE;
 
-	//Setting the vertex buffer
 	hr = myDev->CreatePixelShader(PixelShader, sizeof(PixelShader), nullptr, &pShader);
+	if (FAILED(hr))
+		return FALSE;
+
+	hr = myDev->CreatePixelShader(GrassPixelShader, sizeof(GrassPixelShader), nullptr, &pShaderGrass);
 	if (FAILED(hr))
 		return FALSE;
 
@@ -416,10 +445,8 @@ BOOL InitInstance(HINSTANCE hInstance, int nCmdShow)
 		return FALSE;
 #pragma endregion
 
-#pragma region Mesh Data
-
-	//Importing mesh from binary file
-	LoadMesh(meshName, stairs);
+#pragma region Stump Model
+	LoadMesh(meshName, stump, 1);
 
 	// load it onto  the card
 	D3D11_BUFFER_DESC bDesc;
@@ -427,7 +454,7 @@ BOOL InitInstance(HINSTANCE hInstance, int nCmdShow)
 
 	//setting buffer desc
 	bDesc.BindFlags = D3D11_BIND_VERTEX_BUFFER;
-	bDesc.ByteWidth = sizeof(My_Vertex) * stairs.vertexList.size();
+	bDesc.ByteWidth = sizeof(My_Vertex) * stump.vertexList.size();
 	bDesc.CPUAccessFlags = 0;
 	bDesc.MiscFlags = 0;
 	bDesc.StructureByteStride = 0;
@@ -437,33 +464,81 @@ BOOL InitInstance(HINSTANCE hInstance, int nCmdShow)
 	D3D11_SUBRESOURCE_DATA subData;
 	ZeroMemory(&subData, sizeof(subData));
 
-	subData.pSysMem = stairs.vertexList.data();
+	subData.pSysMem = stump.vertexList.data();
 	hr = myDev->CreateBuffer(&bDesc, &subData, &vBuf);
 	if (FAILED(hr))
 		return FALSE;
 
-	// Set vertex buffer
-	UINT stride = sizeof(My_Vertex);
-	UINT offset = 0;
-	myCon->IASetVertexBuffers(0, 1, &vBuf, &stride, &offset);
-
-
 	// Create index Buffer
 	bDesc.Usage = D3D11_USAGE_DEFAULT;
-	bDesc.ByteWidth = sizeof(uint32_t) * stairs.indicesList.size();        // 36 vertices needed for 12 triangles in a triangle list
+	bDesc.ByteWidth = sizeof(uint32_t) * stump.indicesList.size();
 	bDesc.BindFlags = D3D11_BIND_INDEX_BUFFER;
 	bDesc.CPUAccessFlags = 0;
-	subData.pSysMem = stairs.indicesList.data();
+	subData.pSysMem = stump.indicesList.data();
 	hr = myDev->CreateBuffer(&bDesc, &subData, &iBuf);
 	if (FAILED(hr))
 		return FALSE;
+#pragma endregion
 
-	// Set index buffer
-	myCon->IASetIndexBuffer(iBuf, DXGI_FORMAT_R32_UINT, 0);
+#pragma region LightBulb Model
+
+	LoadMesh(meshName2, lightBulb, 0.0005f);
+	bDesc.BindFlags = D3D11_BIND_VERTEX_BUFFER;
+	bDesc.ByteWidth = sizeof(My_Vertex) * lightBulb.vertexList.size();
+	subData.pSysMem = lightBulb.vertexList.data();
+	hr = myDev->CreateBuffer(&bDesc, &subData, &vBufLight);
+	if (FAILED(hr))
+		return FALSE;
+
+	bDesc.BindFlags = D3D11_BIND_INDEX_BUFFER;
+	bDesc.ByteWidth = sizeof(uint32_t) * lightBulb.indicesList.size();
+	subData.pSysMem = lightBulb.indicesList.data();
+	hr = myDev->CreateBuffer(&bDesc, &subData, &iBufLight);
+	if (FAILED(hr))
+		return FALSE;
+
+#pragma endregion
+
+#pragma region SkyBox / Cube
+
+	LoadMesh(meshName3, Skybox, 1);
+	bDesc.BindFlags = D3D11_BIND_VERTEX_BUFFER;
+	bDesc.ByteWidth = sizeof(My_Vertex) * Skybox.vertexList.size();
+	subData.pSysMem = Skybox.vertexList.data();
+	hr = myDev->CreateBuffer(&bDesc, &subData, &vBufCube);
+	if (FAILED(hr))
+		return FALSE;
+
+	bDesc.BindFlags = D3D11_BIND_INDEX_BUFFER;
+	bDesc.ByteWidth = sizeof(uint32_t) * Skybox.indicesList.size();
+	subData.pSysMem = Skybox.indicesList.data();
+	hr = myDev->CreateBuffer(&bDesc, &subData, &iBufCube);
+	if (FAILED(hr))
+		return FALSE;
+
+#pragma endregion
+
+#pragma region Grass Plane
+
+	LoadMesh(meshName4, GrassPlane, 1);
+	bDesc.BindFlags = D3D11_BIND_VERTEX_BUFFER;
+	bDesc.ByteWidth = sizeof(My_Vertex) * GrassPlane.vertexList.size();
+	subData.pSysMem = GrassPlane.vertexList.data();
+	hr = myDev->CreateBuffer(&bDesc, &subData, &vBufGrassPlane);
+	if (FAILED(hr))
+		return FALSE;
+
+	bDesc.BindFlags = D3D11_BIND_INDEX_BUFFER;
+	bDesc.ByteWidth = sizeof(uint32_t) * GrassPlane.indicesList.size();
+	subData.pSysMem = GrassPlane.indicesList.data();
+	hr = myDev->CreateBuffer(&bDesc, &subData, &iBufGrassPlane);
+	if (FAILED(hr))
+		return FALSE;
+#pragma endregion
+
 
 	// Set primitive topology
 	myCon->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-#pragma endregion
 
 #pragma region Texture
 
@@ -475,6 +550,9 @@ BOOL InitInstance(HINSTANCE hInstance, int nCmdShow)
 	if (FAILED(hr))
 		return FALSE;
 	hr = CreateDDSTextureFromFile(myDev, L"stumpNM.dds", nullptr, &textureRVNM); // Name of texture
+	if (FAILED(hr))
+		return FALSE;
+	hr = CreateDDSTextureFromFile(myDev, L"Grass.dds", nullptr, &textureGrass); // Name of texture
 	if (FAILED(hr))
 		return FALSE;
 
@@ -509,7 +587,34 @@ BOOL InitInstance(HINSTANCE hInstance, int nCmdShow)
 	hr = myDev->CreateBuffer(&bDesc, nullptr, &lBuf);
 	if (FAILED(hr))
 		return FALSE;
+
+	// Create Instance Constant Buffer
+	bDesc.ByteWidth = sizeof(InstanceBuffer);
+	hr = myDev->CreateBuffer(&bDesc, nullptr, &instBuf);
+	if (FAILED(hr))
+		return FALSE;
+
+	// Placing Different instances
+	InstanceBuffer instb1;
+
+	std::random_device rd;
+	std::mt19937 gen(rd());
+	// Instance buffer positions
+	for (int i = 0; i < 5; i++)
+	{
+		for (int j = 0; j < 5; j++)
+		{
+			std::uniform_real_distribution<> dist(0, 1);
+			instb1.positions[(i * 5) + j] = XMMatrixMultiply(XMMatrixIdentity(), XMMatrixScaling(0.2f, 0.2f, 0.2f));
+			instb1.positions[(i * 5) + j] = XMMatrixMultiply(instb1.positions[(i * 5) + j], XMMatrixRotationY(dist(gen) * 2 * XM_PI));
+			instb1.positions[(i * 5) + j] = XMMatrixTranspose(XMMatrixMultiply(instb1.positions[(i * 5) + j], XMMatrixTranslation(-5.0f + (i * 8.0f), 0.0f, -5.0f + (j * 8.0f))));
+		}
+	}
+	myCon->UpdateSubresource(instBuf, 0, nullptr, &instb1, 0, 0);
+
 #pragma endregion
+
+#pragma region Matricies
 
 	// Initialize the world matrices
 	WorldMatrix = XMMatrixIdentity();
@@ -522,6 +627,8 @@ BOOL InitInstance(HINSTANCE hInstance, int nCmdShow)
 
 	ProjectionMatrix = XMMatrixPerspectiveFovLH(XM_PIDIV4, swap.BufferDesc.Width / (FLOAT)swap.BufferDesc.Height, 0.01f, 100.0f);
 
+#pragma endregion
+	
 	return TRUE;
 }
 
@@ -728,7 +835,7 @@ INT_PTR CALLBACK About(HWND hDlg, UINT message, WPARAM wParam, LPARAM lParam)
 	return (INT_PTR)FALSE;
 }
 
-void LoadMesh(const char* meshFileName, My_Mesh& mesh) {
+void LoadMesh(const char* meshFileName, My_Mesh& mesh, float size) {
 
 	fstream file(meshFileName, std::ios_base::in | ios_base::binary);
 	assert(file.is_open());
@@ -748,9 +855,9 @@ void LoadMesh(const char* meshFileName, My_Mesh& mesh) {
 
 	for (int i = 0; i < mesh.vertexList.size(); i++)
 	{
-		mesh.vertexList[i].Pos.x *= scaleBy;
-		mesh.vertexList[i].Pos.y *= scaleBy;
-		mesh.vertexList[i].Pos.z *= scaleBy;
+		mesh.vertexList[i].Pos.x *= size;
+		mesh.vertexList[i].Pos.y *= size;
+		mesh.vertexList[i].Pos.z *= size;
 
 		mesh.vertexList[i].Tex.y = 1.0 - mesh.vertexList[i].Tex.y;
 	}
@@ -766,17 +873,27 @@ void CleanupDevice()
 	if (textureRV) textureRV->Release();
 	if (textureRVAO) textureRVAO->Release();
 	if (textureRVNM) textureRVNM->Release();
+	if (textureSky) textureSky->Release();
+	if (textureGrass) textureGrass->Release();
 	if (vBuf) vBuf->Release();
+	if (vBufLight) vBufLight->Release();
+	if (vBufCube) vBufCube->Release();
+	if (vBufGrassPlane) vBufGrassPlane->Release();
 	if (iBuf) iBuf->Release();
+	if (iBufLight) iBufLight->Release();
+	if (iBufCube) iBufCube->Release();
+	if (iBufGrassPlane) iBufGrassPlane->Release();
 	if (vLayout) vLayout->Release();
 	if (vShader) vShader->Release();
 	if (pShader) pShader->Release();
+	if (pShaderGrass) pShaderGrass->Release();
 	if (gShader) gShader->Release();
 	if (depthStencil) depthStencil->Release();
 	if (myRtv) myRtv->Release();
 	if (depthView) depthView->Release();
 	if (cBuf) cBuf->Release();
 	if (lBuf) lBuf->Release();
+	if (instBuf) instBuf->Release();
 	if (myDev) myDev->Release();
 	if (rState) rState->Release();
 	if (mySwap) mySwap->Release();
@@ -819,9 +936,11 @@ void Render()
 	ZeroCameraValues();
 #pragma endregion
 
+	XMMATRIX scaled = XMMatrixScaling(scaleBy, scaleBy, scaleBy);
+
 	// Update matrix variables for the Constant buffer
 	ConstantBuffer cb1;
-	cb1.mWorld = XMMatrixTranspose(WorldMatrix);
+	cb1.mWorld = XMMatrixTranspose(XMMatrixMultiply(WorldMatrix, scaled));
 	cb1.mView = XMMatrixTranspose(XMMatrixInverse(nullptr, ViewMatrix));
 	cb1.mProjection = XMMatrixTranspose(ProjectionMatrix);
 	myCon->UpdateSubresource(cBuf, 0, nullptr, &cb1, 0, 0);
@@ -834,12 +953,14 @@ void Render()
 	// Input Assembler
 	myCon->IASetInputLayout(vLayout);
 
+
 	//Rendering the Shape
 #pragma region Shaders
 
 	//Vertex shader stage
 	myCon->VSSetShader(vShader, nullptr, 0);
 	myCon->VSSetConstantBuffers(0, 1, &cBuf);
+	myCon->VSSetConstantBuffers(1, 1, &instBuf);
 
 	//Geometry shader stage
 	myCon->GSSetShader(nullptr, nullptr, 0);
@@ -857,53 +978,105 @@ void Render()
 
 #pragma endregion
 
-	//Draw Model
-	myCon->DrawIndexed(stairs.indicesList.size(), 0, 0);
+#pragma region Draw Models
+	UINT stride = sizeof(My_Vertex);
+	UINT offset = 0;
+
+	//Draw Stump
+	// Set vertex buffer
+	myCon->IASetVertexBuffers(0, 1, &vBuf, &stride, &offset);
+	// Set index buffer
+	myCon->IASetIndexBuffer(iBuf, DXGI_FORMAT_R32_UINT, 0);
+	//myCon->DrawIndexed(stump.indicesList.size(), 0, 0);
+
+	//myCon->DrawIndexedInstanced(stump.indicesList.size(), 2, 0, 0, 0);
+	myCon->DrawInstanced(stump.vertexList.size(), 25, 0, 0);
+
+
+	//Draw Plane
+	cb1.mWorld = XMMatrixMultiply(XMMatrixIdentity(), XMMatrixScaling(50.0f, 50.0f, 50.0f));
+	cb1.mWorld = XMMatrixTranspose(XMMatrixMultiply(cb1.mWorld, XMMatrixTranslation(0.0f, -2.0f, 0.0f)));
+	myCon->UpdateSubresource(cBuf, 0, nullptr, &cb1, 0, 0);
+	//myCon->PSSetShader(pShaderGrass, nullptr, 0);
+	myCon->PSSetConstantBuffers(0, 1, &lBuf);
+	myCon->PSSetShaderResources(0, 1, &textureGrass);
+	myCon->PSSetSamplers(0, 1, &samplLinear);
+
+	myCon->IASetVertexBuffers(0, 1, &vBufGrassPlane, &stride, &offset);
+	myCon->IASetIndexBuffer(iBufGrassPlane, DXGI_FORMAT_R32_UINT, 0);
+	myCon->DrawIndexed(GrassPlane.indicesList.size(), 0, 0);
+
+#pragma endregion
+
 
 #pragma region Lights
 
-	const int numLights = 2;
+	const int numLights = 4;
 	// temp light and colors
 	XMFLOAT4 vLightDirs[numLights] =
 	{
 		XMFLOAT4(0.0f, 0.0f, -1.0f, 1.0f),
-		XMFLOAT4(-0.577f, 0.577f, -0.577f, 1.0f),
+		XMFLOAT4(0.0f, -0.5f, 0.0f, 1.0f),
 	};
 	XMFLOAT4 vLightColors[numLights] =
 	{
-		XMFLOAT4(Colors::White),
-		XMFLOAT4(Colors::White),
+		XMFLOAT4(Colors::Green),
+		XMFLOAT4(Colors::Yellow),
+		XMFLOAT4(Colors::Red),
+		XMFLOAT4(Colors::Blue),
+	};
+
+	XMFLOAT4 vLightPos[numLights] =
+	{
+		XMFLOAT4(0.0f, 0.0f, -1.0f, 1.0f),
+		XMFLOAT4(-0.5f, 0.5f, 0.5f, 1.0f),
 	};
 
 	// Rotate the second light around the origin
-	XMMATRIX mRotate = XMMatrixRotationY(-1.0f * t);
-	XMVECTOR vLightDir = XMLoadFloat4(&vLightDirs[0]);
-	vLightDir = XMVector3Transform(vLightDir, mRotate);
-	XMStoreFloat4(&vLightDirs[0], vLightDir);
+	XMMATRIX mRotate = XMMatrixRotationY(1.0f * t);
+	XMVECTOR vLightPos1 = XMLoadFloat4(&vLightPos[1]);
+	vLightPos1 = XMVector3TransformCoord(vLightPos1, mRotate);  // XMVector3TransformCoord(vLightDir, mRotate); // for pos
+	XMStoreFloat4(&vLightPos[1], vLightPos1);
 
+	vLightDirs[0].x *= sin(t * 1.0f);
+	vLightColors[0].y *= cos(t * 1.0f);
 
 	// Update matrix vars for the Light Buffer
-	XMMATRIX mLight = XMMatrixTranslationFromVector(1.0f * XMLoadFloat4(&vLightDirs[0]));
-	XMMATRIX mLightScale = XMMatrixScaling(0.8f, 0.8f, 0.8f);
+	XMMATRIX mLight = XMMatrixTranslationFromVector(15.0f * XMLoadFloat4(&vLightPos[1]));
+	XMMATRIX mLightScale = XMMatrixScaling(5.0f, 5.0f, 5.0f);
 	mLight = mLightScale * mLight;
-
-	//setting rotation
+	   	
 	cb1.mWorld = XMMatrixTranspose(mLight);
 	myCon->UpdateSubresource(cBuf, 0, nullptr, &cb1, 0, 0);
-	
+
 	LightBuffer lb1 = {};
+	lb1.lightPos.x = mLight.r[3].m128_f32[0];
+	lb1.lightPos.y = mLight.r[3].m128_f32[1];
+	lb1.lightPos.z = mLight.r[3].m128_f32[2];
+	lb1.lightPos.w = mLight.r[3].m128_f32[3];
+
 	lb1.lightDir[0] = vLightDirs[0];		
 	lb1.lightDir[1] = vLightDirs[1];
 	lb1.lightColor[0] = vLightColors[0];
 	lb1.lightColor[1] = vLightColors[1];
-	lb1.coneRange = 10.0f;
+	lb1.lightColor[2] = vLightColors[2];
+	lb1.lightColor[3] = vLightColors[3];
+	lb1.lightRadius = 100.0f;
 	lb1.coneSize = 2.0f;
-	lb1.coneRatio = 0.0f;
+	lb1.coneDir = vLightDirs[1];
+	lb1.innerConeRatio = 0.95f;
+	lb1.outerConeRatio = 0.8f;
+
 	myCon->UpdateSubresource(lBuf, 0, nullptr, &lb1, 0, 0);
 	myCon->PSSetShader(pShader, nullptr, 0);
 	myCon->PSSetConstantBuffers(0, 1, &lBuf);
 
-	//myCon->DrawIndexed(stairs.indicesList.size(), 0, 0); // Show model
+	//Draw Model
+	// Set vertex buffer
+	myCon->IASetVertexBuffers(0, 1, &vBufLight, &stride, &offset);
+	// Set index buffer
+	myCon->IASetIndexBuffer(iBufLight, DXGI_FORMAT_R32_UINT, 0);
+	myCon->DrawIndexed(lightBulb.indicesList.size(), 0, 0);
 
 #pragma endregion
 

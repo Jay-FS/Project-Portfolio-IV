@@ -18,64 +18,75 @@ struct PS_INPUT
 cbuffer LightBuffer : register(b0)
 {
     float4 lightDir[2];
-    float4 lightColor[2];
+    float4 lightColor[4];
+    float4 lightPos;
+    float lightRadius;
+    float3 padding0;
+    float4 coneDir;
     float coneSize;
-    float coneDir;
-    float coneRange;
     float coneRatio;
+    float innerConeRatio;
+    float outerConeRatio;
 }
 
 float4 main(PS_INPUT input) : SV_TARGET
 {
-	float4 finalColor = (float4)0;
+	float4 finalColor = (float4)0; // Result
+    float attenuation = 0;
     int numLights = 2;
 	finalColor = 0;		
-
+    attenuation = 0;
     
     // NORMAL MAPPING
     float4 NM = txNM.Sample(samLinear, input.Tex);
-
+    
     NM = (2.0f * NM) - 1.0f;
     // making the tan orthogonal to the normal
-    float3 newTan = normalize((float3) input.Tan - (dot((float3) input.Tan, input.Norm) * input.Norm));
-    float3x3 texSpace = float3x3(newTan, (float3) input.Binorm, input.Norm);
-    float3 newNorm = saturate(mul((float1x3) NM, texSpace));
+    input.Tan.xyz = normalize(input.Tan.xyz);
+    input.Binorm.xyz = normalize(input.Binorm.xyz);
+    input.Norm.xyz = normalize(input.Norm.xyz);
+    float3 newTan = normalize(input.Tan.xyz - (dot(input.Tan.xyz, input.Norm.xyz) * input.Norm.xyz));
+    //float3x3 texSpace = float3x3(newTan.xyz, input.Binorm.xyz, input.Norm.xyz);
+    float3x3 texSpace = float3x3(input.Tan.xyz, input.Binorm.xyz, input.Norm.xyz);
+    float3 newNorm = normalize(mul(NM.xyz, texSpace));
 
     //LIGHTING
 
-    //Fall off by radius
-    //attenuation = 1.0 - saturate(length(lightDir - input.worldPos) / lightRadius);
+    //Directional light
+    //float3 newDir = -normalize(-lightDir[1]); // normalize the light direction
+    float4 DirectionalLight = saturate(dot(lightDir[0].xyz, newNorm)) * lightColor[0];
+        
 
-    //Fall off by Cone Edge
-    //attenuation = 1.0 - saturate(innerConeRatio - surfaceRatio) / innerConeRatio - outerConeRatio));
-    
-    //Make Attenuation quadratic
-    //attenuation *= attenuation;
-        
-    for (int i = 0; i < numLights; i++)
-    {
-	    //Directional light
-        float3 newDir = -normalize(-lightDir[i]); // normalize the light direction
-        finalColor += saturate(dot( newDir, newNorm)) * lightColor[i]; // * attenuation;
-        
-        //Point Light
-        //float3 lightDirection = normalize(lightDir[i].xyz - input.worldPos);
-        //float4 lightRatio = saturate(dot(lightDirection, newNorm));
-        //finalColor = lightRatio * lightColor[i];
+    //Point Light
+    float3 lightPosition = normalize(lightPos.xyz - input.worldPos);
+    float4 lightRatio1 = saturate(dot(lightPosition, newNorm));
+        //Fall off by radius
+    attenuation = 1.0 - saturate(length(lightPos.xyz - input.worldPos) / lightRadius);
+    float4 PointLight = lightRatio1 * lightColor[3] * attenuation;
+
 
         //Spot Light
-        //float3 newDir = normalize(lightDir[i].xyz - input.worldPos);
-        //float surfaceRatio = saturate(dot(-newDir, coneDir));
-        //float spotFactor = (surfaceRatio > coneRatio) ? 1 : 0;
-        //float lightRatio = saturate(dot(newDir, newNorm));
-        //finalColor = spotFactor * lightRatio * lightColor[i];
-        
-    }
+    float3 newDir = normalize(lightPos.xyz - input.worldPos);
+    float surfaceRatio = saturate(dot(-newDir, normalize(coneDir.xyz)));
+        //Fall off by Cone Edge
+    attenuation = (1.0 - saturate((innerConeRatio - surfaceRatio) / (innerConeRatio - outerConeRatio)));
+    attenuation *= (1.0 - saturate(length(lightPos.xyz - input.worldPos) / lightRadius));
+    float spotFactor = (surfaceRatio > outerConeRatio) ? 1 : 0;
+    float lightRatio = saturate(dot(newDir, newNorm));
+    float4 SpotLight = spotFactor * lightRatio * lightColor[2] * attenuation;
+
     //FINAL TEXTURE AND AO
-    float4 AO = txAO.Sample(samLinear, input.Tex); 
-	finalColor *= txDiffuse.Sample(samLinear, input.Tex);
+    float4 ambient = txDiffuse.Sample(samLinear, input.Tex) * 0.5f;
+
+    finalColor += DirectionalLight;
+    finalColor += PointLight;
+    finalColor += SpotLight;
+    finalColor += ambient;
+
+    float4 AO = txAO.Sample(samLinear, input.Tex);
+    finalColor *= txDiffuse.Sample(samLinear, input.Tex);
     finalColor *= AO;
 
-	return finalColor;
+    return saturate(finalColor);
 }
 
