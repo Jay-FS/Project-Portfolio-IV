@@ -26,12 +26,5 @@ float4 main(PS_INPUT input) : SV_TARGET
 
     finalColor += saturate(dot((float3) lightDir[0], input.Norm)) * lightColor[0];
     finalColor *= txDiffuse.Sample(samLinear, input.Tex);
-
-
-        //Point Light
-    //float3 lightDirection = normalize(lightDir[0].xyz - input.worldPos);
-    //float4 lightRatio = saturate(dot(lightDirection, input.Norm));
-    //    //attenuation = 1.0 - saturate(length(lightDir[i].xyz - input.worldPos) / lightRadius);
-    //finalColor = lightRatio * lightColor[0]; // * attenuation;
 	return finalColor;
 }

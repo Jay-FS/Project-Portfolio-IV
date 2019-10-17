@@ -8,7 +8,7 @@ cbuffer ConstantBuffer : register(b0)
 
 cbuffer InstanceBuffer : register(b1)
 {
-    matrix positions[20];
+    matrix positions[400];
 }
 
 struct VS_INPUT
@@ -34,7 +34,7 @@ VS_OUTPUT main(VS_INPUT input, uint instanceId : SV_InstanceID)
 {
 	VS_OUTPUT output = (VS_OUTPUT)0;
 	output.Pos = mul(input.Pos, positions[instanceId]);
-    output.worldPos = output.Pos;
+    output.worldPos = output.Pos.xyz;
 	output.Pos = mul(output.Pos, View);
 	output.Pos = mul(output.Pos, Projection);
 	output.Norm = mul(float4(input.Norm, 0.0f), World).xyz;

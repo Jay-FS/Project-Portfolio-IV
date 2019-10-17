@@ -57,5 +57,10 @@
     <FxCompile Include="PixelShader.hlsl" />
     <FxCompile Include="GeometryShader.hlsl" />
     <FxCompile Include="GrassPixelShader.hlsl" />
+    <FxCompile Include="SkyBox.hlsl" />
+    <FxCompile Include="SkyBoxVert.hlsl" />
+    <FxCompile Include="CubeMapSpecular.hlsl" />
+    <FxCompile Include="SpecularCorrect.hlsl" />
+    <FxCompile Include="PointToQuad.hlsl" />
   </ItemGroup>
 </Project>

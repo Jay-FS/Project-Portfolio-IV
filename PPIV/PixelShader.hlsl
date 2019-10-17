@@ -45,7 +45,7 @@ float4 main(PS_INPUT input) : SV_TARGET
     input.Tan.xyz = normalize(input.Tan.xyz);
     input.Binorm.xyz = normalize(input.Binorm.xyz);
     input.Norm.xyz = normalize(input.Norm.xyz);
-    float3 newTan = normalize(input.Tan.xyz - (dot(input.Tan.xyz, input.Norm.xyz) * input.Norm.xyz));
+    //float3 newTan = normalize(input.Tan.xyz - (dot(input.Tan.xyz, input.Norm.xyz) * input.Norm.xyz));
     //float3x3 texSpace = float3x3(newTan.xyz, input.Binorm.xyz, input.Norm.xyz);
     float3x3 texSpace = float3x3(input.Tan.xyz, input.Binorm.xyz, input.Norm.xyz);
     float3 newNorm = normalize(mul(NM.xyz, texSpace));
@@ -53,7 +53,6 @@ float4 main(PS_INPUT input) : SV_TARGET
     //LIGHTING
 
     //Directional light
-    //float3 newDir = -normalize(-lightDir[1]); // normalize the light direction
     float4 DirectionalLight = saturate(dot(lightDir[0].xyz, newNorm)) * lightColor[0];
         
 
@@ -75,14 +74,15 @@ float4 main(PS_INPUT input) : SV_TARGET
     float lightRatio = saturate(dot(newDir, newNorm));
     float4 SpotLight = spotFactor * lightRatio * lightColor[2] * attenuation;
 
-    //FINAL TEXTURE AND AO
+
     float4 ambient = txDiffuse.Sample(samLinear, input.Tex) * 0.5f;
 
-    finalColor += DirectionalLight;
-    finalColor += PointLight;
+    //finalColor += DirectionalLight;
+    //finalColor += PointLight;
     finalColor += SpotLight;
-    finalColor += ambient;
+    //finalColor += ambient;
 
+        //FINAL TEXTURE AND AO
     float4 AO = txAO.Sample(samLinear, input.Tex);
     finalColor *= txDiffuse.Sample(samLinear, input.Tex);
     finalColor *= AO;
