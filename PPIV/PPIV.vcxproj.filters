@@ -62,5 +62,6 @@
     <FxCompile Include="CubeMapSpecular.hlsl" />
     <FxCompile Include="SpecularCorrect.hlsl" />
     <FxCompile Include="PointToQuad.hlsl" />
+    <FxCompile Include="RenderToTexture.hlsl" />
   </ItemGroup>
 </Project>

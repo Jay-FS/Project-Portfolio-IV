@@ -1,5 +1,21 @@
 // PPIV.cpp : Defines the entry point for the application.
 //
+
+
+// TODO
+
+// FRUSTRUM CULLING 
+// RENER TO TEXTURE 
+// POINT TO QUAD
+// IN THAT ORDER
+
+
+
+
+
+
+
+
 #pragma region Headers
 #include <d3d11.h>
 #include <d3dcompiler.h>
@@ -39,6 +55,7 @@ using namespace DirectX;
 using namespace std;
 
 #pragma endregion
+
 
 // Structs
 
@@ -116,6 +133,7 @@ float rotateX;
 float rotateY;
 
 float speed = 0;
+bool showMouse = true;
 
 XMMATRIX XRotation;
 XMMATRIX YRotation;
@@ -200,6 +218,8 @@ void Render();
 BOOL InitDirectInput(HINSTANCE hInstance);
 void DetectInput(double time);
 void ZeroCameraValues(void);
+void CreateFrustrum(XMMATRIX view, XMMATRIX proj, float depth);
+
 
 #pragma endregion
 
@@ -793,6 +813,10 @@ void DetectInput(double time)
 	{
 
 	}
+	if (keyboardState[DIK_M] & 0x80) // show mouse
+	{		
+		
+	}
 
 #pragma endregion
 
@@ -815,6 +839,11 @@ void ZeroCameraValues(void)
 {
 	moveZ = moveX = moveY = 0;
 	rotateY = rotateX = 0;
+}
+
+void CreateFrustrum(XMMATRIX view, XMMATRIX proj, float depth)
+{
+
 }
 
 
@@ -930,6 +959,8 @@ void CleanupDevice()
 	if (vShader) vShader->Release();
 	if (vShaderQuad) vShaderQuad->Release();
 	if (pShader) pShader->Release();
+	if (pShaderSpec) pShaderSpec->Release();
+	if (pShaderSpecular) pShaderSpecular->Release();
 	if (pShaderGrass) pShaderGrass->Release();
 	if (vShaderSky) vShaderSky->Release();
 	if (pShaderSky) pShaderSky->Release();
@@ -992,8 +1023,6 @@ void Render()
 	myCon->ClearRenderTargetView(myRtv, Colors::Black);
 
 #pragma region SkyBox
-
-
 
 	//clear the depth buffer to max depth (1.0)
 	myCon->ClearDepthStencilView(depthView, D3D11_CLEAR_DEPTH, 1.0f, 0);
@@ -1072,8 +1101,6 @@ void Render()
 
 #pragma endregion
 
-
-
 #pragma region Point To Quad
 
 	//myCon->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_POINTLIST);
@@ -1089,8 +1116,6 @@ void Render()
 
 	//myCon->Draw(1, 0);
 #pragma endregion
-
-
 
 #pragma region Lights
 

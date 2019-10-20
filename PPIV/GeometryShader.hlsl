@@ -25,29 +25,29 @@ void main(
 	inout TriangleStream< GS_OUTPUT > output
 )
 {
-//    GS_OUTPUT element[4] = { (GS_OUTPUT) 0 };
+    //GS_OUTPUT element[4] = { (GS_OUTPUT) 0 };
 
-//    for (int i = 0; i < 4; ++i)
-//    {
-//        element[i].pos = input[i].Pos;
-//    }
-//    element[0].pos.x -= 1.0f;
-//    element[0].pos.y += 1.0f;
+    //for (int i = 0; i < 4; ++i)
+    //{
+    //    element[i].pos = input[i].Pos;
+    //}
+    //element[0].pos.x -= 1.0f;
+    //element[0].pos.y += 1.0f;
 
-//    element[1].pos.x += 1.0f;
-//    element[1].pos.y += 1.0f;
+    //element[1].pos.x += 1.0f;
+    //element[1].pos.y += 1.0f;
 
-//    element[2].pos.x -= 1.0f;
-//    element[2].pos.y -= 1.0f;
+    //element[2].pos.x -= 1.0f;
+    //element[2].pos.y -= 1.0f;
     
-//    element[3].pos.x += 1.0f;
-//    element[3].pos.y -= 1.0f;
+    //element[3].pos.x += 1.0f;
+    //element[3].pos.y -= 1.0f;
 
-//    for (int i = 0; i < 4; ++i)
-//    {
-//        element[i].pos = mul(element[i].pos, World);
-//        element[i].pos = mul(element[i].pos, View);
-//        element[i].pos = mul(element[i].pos, Projection);
-//        output.Append(element[i]);
-//    }
+    //for (int i = 0; i < 4; ++i)
+    //{
+    //    element[i].pos = mul(element[i].pos, World);
+    //    element[i].pos = mul(element[i].pos, View);
+    //    element[i].pos = mul(element[i].pos, Projection);
+    //    output.Append(element[i]);
+    //}
 }
