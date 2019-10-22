@@ -11,11 +11,6 @@
 
 
 
-
-
-
-
-
 #pragma region Headers
 #include <d3d11.h>
 #include <d3dcompiler.h>
@@ -31,6 +26,7 @@
 #include <vector>
 #include <random>
 #include <fstream>
+#include <thread>
 
 #include "framework.h"
 #include "PPIV.h"
@@ -45,6 +41,7 @@
 #include "CubeMapSpecular.csh"
 #include "SpecularCorrect.csh"
 #include "PointToQuad.csh"
+#include "WavingGrassVS.csh"
 
 // Texture Loading
 #include "DDSTextureLoader.h"
@@ -104,6 +101,12 @@ struct InstanceBuffer
 	XMMATRIX positions[400];
 };
 
+struct TimeBuffer
+{
+	FLOAT time;
+	XMFLOAT3 padding;
+};
+
 #pragma region Variables
 // funtime random color
 #define RAND_COLOR XMFLOAT4(rand()/float(RAND_MAX),rand()/float(RAND_MAX),rand()/float(RAND_MAX),1.0f)
@@ -112,10 +115,17 @@ struct InstanceBuffer
 const char* meshName = "stumpTanBinorm.mesh";
 const char* meshName2 = "LightBulb.mesh";
 const char* meshName3 = "UvReverseCube.mesh";
-const char* meshName4 = "GrassPlane.mesh";
+const char* meshName4 = "Grass.mesh";
 
-int instanceAmount = 400;
-int instanceWidth = 20;
+int instanceAmount = 100;
+int instanceWidth = 10;
+
+float windowWidth = CW_USEDEFAULT;
+float windowHeight = CW_USEDEFAULT;
+
+float FOV = XM_PIDIV4;
+float nearZ = 0.001f;
+float farZ = 100.0f;
 
 #pragma region Mouse and Key Vars
 
@@ -135,6 +145,12 @@ float rotateY;
 float speed = 0;
 bool showMouse = true;
 
+bool fullscreen = false;
+RECT fullRect;
+
+bool lookAt;
+bool clear = false;
+
 XMMATRIX XRotation;
 XMMATRIX YRotation;
 XMMATRIX camView;
@@ -147,7 +163,9 @@ ID3D11DeviceContext* myCon;
 
 // For Drawing 
 ID3D11RenderTargetView* myRtv;
+ID3D11RenderTargetView* myRtvTWO;
 D3D11_VIEWPORT myPort;
+D3D11_VIEWPORT myPortTWO;
 
 ID3D11Texture2D* depthStencil;	// z Buffer
 ID3D11DepthStencilView* depthView;
@@ -162,6 +180,7 @@ ID3D11Buffer* iBufCube;			// Index Buffer for cube / skybox
 ID3D11Buffer* iBufGrassPlane;	// Index Buffer for grass planen
 ID3D11Buffer* cBuf;				// Constant Buffer
 ID3D11Buffer* lBuf;				// Light Buffer
+ID3D11Buffer* tBuf;				// Light Buffer
 ID3D11Buffer* instBuf;			// Instance Buffer
 ID3D11VertexShader* vShader;	//HLSL
 ID3D11PixelShader* pShader;		//HLSL
@@ -171,6 +190,7 @@ ID3D11PixelShader* pShaderSky;  //HLSL
 ID3D11PixelShader* pShaderSpec; //HLSL
 ID3D11PixelShader* pShaderSpecular; //HLSL
 ID3D11VertexShader* vShaderQuad;//HLSL
+ID3D11VertexShader* vShaderGrass;//HLSL
 ID3D11GeometryShader* gShader;  //HLSL
 
 //Texture variables
@@ -184,18 +204,22 @@ ID3D11SamplerState* samplLinear;
 
 //Rasterizer
 ID3D11RasterizerState* rState;
-
+ID3D11BlendState* bState;
 //My Meshes
 My_Mesh stump;
 My_Mesh lightBulb;
 My_Mesh SkyCube;
 My_Mesh GrassPlane;
 
+UINT stride = sizeof(My_Vertex);
+UINT offset = 0;
+
 // Matricies
 
 XMMATRIX WorldMatrix;
 XMMATRIX ViewMatrix;
 XMMATRIX ProjectionMatrix;
+XMMATRIX ProjectionMatrixTWO;
 
 // Scaling Things
 float scaleBy = 20.0f;
@@ -218,8 +242,7 @@ void Render();
 BOOL InitDirectInput(HINSTANCE hInstance);
 void DetectInput(double time);
 void ZeroCameraValues(void);
-void CreateFrustrum(XMMATRIX view, XMMATRIX proj, float depth);
-
+void RenderTWO();
 
 #pragma endregion
 
@@ -290,7 +313,12 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 
 			frameTime = GetFrameTime();
 			DetectInput(frameTime);
+			myCon->ClearRenderTargetView(myRtv, Colors::Black);
+			myCon->RSSetViewports(1, &myPort);
 			Render();
+			myCon->RSSetViewports(1, &myPortTWO);
+			RenderTWO();
+			mySwap->Present(0, 0);
 		}
 
 	}
@@ -326,6 +354,7 @@ ATOM MyRegisterClass(HINSTANCE hInstance)
 	return RegisterClassExW(&wcex);
 }
 
+
 //
 //   FUNCTION: InitInstance(HINSTANCE, int)
 //
@@ -343,7 +372,7 @@ BOOL InitInstance(HINSTANCE hInstance, int nCmdShow)
 
 	hInst = hInstance; // Store instance handle in our global variable
 	hWnd = CreateWindowW(szWindowClass, szTitle, WS_OVERLAPPEDWINDOW,
-		CW_USEDEFAULT, 0, CW_USEDEFAULT, 0, nullptr, nullptr, hInstance, nullptr);
+		windowWidth, 0, windowHeight, 0, nullptr, nullptr, hInstance, nullptr);
 
 	if (!hWnd)
 	{
@@ -373,6 +402,7 @@ BOOL InitInstance(HINSTANCE hInstance, int nCmdShow)
 	swap.BufferDesc.Height = myWinR.bottom - myWinR.top;
 	swap.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT; // refer to api
 	swap.SampleDesc.Count = 1;
+	swap.Flags = DXGI_SWAP_CHAIN_FLAG_ALLOW_MODE_SWITCH;
 
 	HRESULT hr;
 
@@ -386,7 +416,10 @@ BOOL InitInstance(HINSTANCE hInstance, int nCmdShow)
 	if (FAILED(hr))
 		return FALSE;
 
-	myDev->CreateRenderTargetView(backbuffer, NULL, &myRtv);
+	hr = myDev->CreateRenderTargetView(backbuffer, NULL, &myRtv);
+	if (FAILED(hr))
+		return FALSE;
+	hr = myDev->CreateRenderTargetView(backbuffer, NULL, &myRtvTWO);
 	backbuffer->Release();
 	if (FAILED(hr))
 		return FALSE;
@@ -417,7 +450,7 @@ BOOL InitInstance(HINSTANCE hInstance, int nCmdShow)
 	if (FAILED(hr))
 		return FALSE;
 
-	myCon->OMSetRenderTargets(1, &myRtv, depthView);
+	myCon->OMSetRenderTargets(2, &myRtv, depthView);
 
 	// Create a rasterizer state
 	D3D11_RASTERIZER_DESC rasterDesc = {};
@@ -432,13 +465,34 @@ BOOL InitInstance(HINSTANCE hInstance, int nCmdShow)
 
 	myCon->RSSetState(rState);
 
+	// Create a Blend State
+	D3D11_BLEND_DESC blendDesc = {};
+	blendDesc.IndependentBlendEnable = true;
+	blendDesc.AlphaToCoverageEnable = true;
+	
+	hr = myDev->CreateBlendState(&blendDesc, &bState);
+	if (FAILED(hr))
+		return FALSE;
+
+	//myCon->OMSetBlendState(bState, 10.0f, nullptr);
+
 	//the viewport
+
 	myPort.Width = (FLOAT)swap.BufferDesc.Width;
 	myPort.Height = (FLOAT)swap.BufferDesc.Height;
 	myPort.TopLeftX = 0;
 	myPort.TopLeftY = 0;
 	myPort.MinDepth = 0;
 	myPort.MaxDepth = 1; //ndc depth from 0-1
+
+
+	myPortTWO.Width = (FLOAT)swap.BufferDesc.Width / 4.0f;
+	myPortTWO.Height = (FLOAT)swap.BufferDesc.Height / 4.0f;
+	myPortTWO.TopLeftX = 0;
+	myPortTWO.TopLeftY = 0;
+	myPortTWO.MinDepth = 0;
+	myPortTWO.MaxDepth = 1; //ndc depth from 0-1
+
 
 #pragma endregion
 
@@ -457,6 +511,7 @@ BOOL InitInstance(HINSTANCE hInstance, int nCmdShow)
 
 	// set the input layout
 	myCon->IASetInputLayout(vLayout);
+
 #pragma region Shaders
 
 	//vertex and pixel shaders
@@ -492,15 +547,29 @@ BOOL InitInstance(HINSTANCE hInstance, int nCmdShow)
 	if (FAILED(hr))
 		return FALSE;
 
+	hr = myDev->CreateVertexShader(WavingGrassVS, sizeof(WavingGrassVS), nullptr, &vShaderGrass);
+	if (FAILED(hr))
+		return FALSE;
+
 	hr = myDev->CreateGeometryShader(GeometryShader, sizeof(GeometryShader), nullptr, &gShader);
 	if (FAILED(hr))
 		return FALSE;
 
 #pragma endregion
 
-#pragma region Stump Model
-	LoadMesh(meshName, stump, 1);
+#pragma region MultiThreaded Loading
 
+	thread model1 = thread(LoadMesh, ref(meshName),  ref(stump), 1.0f);
+	thread model2 = thread(LoadMesh, ref(meshName2), ref(lightBulb), 0.0005f);
+	thread model3 = thread(LoadMesh, ref(meshName3), ref(SkyCube), 1.0f);
+	thread model4 = thread(LoadMesh, ref(meshName4), ref(GrassPlane), 0.2f);
+
+#pragma endregion
+
+
+#pragma region Stump Model
+
+	model1.join();
 	// load it onto  the card
 	D3D11_BUFFER_DESC bDesc;
 	ZeroMemory(&bDesc, sizeof(bDesc));
@@ -535,7 +604,7 @@ BOOL InitInstance(HINSTANCE hInstance, int nCmdShow)
 
 #pragma region LightBulb Model
 
-	LoadMesh(meshName2, lightBulb, 0.0005f);
+	model2.join();
 	bDesc.BindFlags = D3D11_BIND_VERTEX_BUFFER;
 	bDesc.ByteWidth = sizeof(My_Vertex) * lightBulb.vertexList.size();
 	subData.pSysMem = lightBulb.vertexList.data();
@@ -554,7 +623,7 @@ BOOL InitInstance(HINSTANCE hInstance, int nCmdShow)
 
 #pragma region SkyBox / Cube
 
-	LoadMesh(meshName3, SkyCube, 1);
+	model3.join();
 	bDesc.BindFlags = D3D11_BIND_VERTEX_BUFFER;
 	bDesc.ByteWidth = sizeof(My_Vertex) * SkyCube.vertexList.size();
 	subData.pSysMem = SkyCube.vertexList.data();
@@ -573,7 +642,7 @@ BOOL InitInstance(HINSTANCE hInstance, int nCmdShow)
 
 #pragma region Grass Plane
 
-	LoadMesh(meshName4, GrassPlane, 1);
+	model4.join();
 	bDesc.BindFlags = D3D11_BIND_VERTEX_BUFFER;
 	bDesc.ByteWidth = sizeof(My_Vertex) * GrassPlane.vertexList.size();
 	subData.pSysMem = GrassPlane.vertexList.data();
@@ -601,7 +670,7 @@ BOOL InitInstance(HINSTANCE hInstance, int nCmdShow)
 	hr = CreateDDSTextureFromFile(myDev, L"stumpNM.dds", nullptr, &textureRVNM); // Name of texture
 	if (FAILED(hr))
 		return FALSE;
-	hr = CreateDDSTextureFromFile(myDev, L"Grass.dds", nullptr, &textureGrass); // Name of texture
+	hr = CreateDDSTextureFromFile(myDev, L"petal.dds", nullptr, &textureGrass); // Name of texture
 	if (FAILED(hr))
 		return FALSE;
 	hr = CreateDDSTextureFromFile(myDev, L"CubeMapSkyBox.dds", nullptr, &textureSky); // Name of texture
@@ -646,8 +715,14 @@ BOOL InitInstance(HINSTANCE hInstance, int nCmdShow)
 	if (FAILED(hr))
 		return FALSE;
 
+	// Create time buffer
+	bDesc.ByteWidth = sizeof(TimeBuffer);
+	hr = myDev->CreateBuffer(&bDesc, nullptr, &tBuf);
+	if (FAILED(hr))
+		return FALSE;
+
 	// Placing Different instances
-	InstanceBuffer instb1;
+	InstanceBuffer instb1 = {};
 
 	std::random_device rd;
 	std::mt19937 gen(rd());
@@ -677,7 +752,9 @@ BOOL InitInstance(HINSTANCE hInstance, int nCmdShow)
 	XMVECTOR Up = XMVectorSet(0.0f, 1.0f, 0.0f, 0.0f);
 	ViewMatrix = XMMatrixInverse(nullptr, XMMatrixLookAtLH(Eye, At, Up));
 
-	ProjectionMatrix = XMMatrixPerspectiveFovLH(XM_PIDIV4, swap.BufferDesc.Width / (FLOAT)swap.BufferDesc.Height, 0.01f, 100.0f);
+	GetClientRect(hWnd, &fullRect);
+	ProjectionMatrix = XMMatrixPerspectiveFovLH(FOV, (FLOAT)fullRect.right / (FLOAT)fullRect.bottom, nearZ, farZ);
+	ProjectionMatrixTWO = XMMatrixPerspectiveFovLH(FOV, ((FLOAT)fullRect.right / 4) / ((FLOAT)fullRect.bottom / 4), nearZ, farZ);
 
 #pragma endregion
 	
@@ -775,8 +852,6 @@ void DetectInput(double time)
 	DIKey->GetDeviceState(sizeof(keyboardState), (LPVOID)&keyboardState);
 	DIMouse->GetDeviceState(sizeof(DIMOUSESTATE), &mouseStateCurr);
 
-	speed = 10.0f * time;
-
 #pragma region KeyBoard
 
 	if (keyboardState[DIK_ESCAPE] & 0x80)
@@ -807,16 +882,93 @@ void DetectInput(double time)
 	}
 	if (keyboardState[DIK_UPARROW] & 0x80) // zoom in
 	{
+		if (FOV > 0.4f)
+		{
+			FOV -= 1.0f * time;
+			ProjectionMatrix = XMMatrixPerspectiveFovLH(FOV, (FLOAT)fullRect.right / (FLOAT)fullRect.bottom, nearZ, farZ);
 
+			ProjectionMatrixTWO = XMMatrixPerspectiveFovLH(FOV, ((FLOAT)fullRect.right / 4) / ((FLOAT)fullRect.bottom / 4), nearZ, farZ);
+		}
 	}
 	if (keyboardState[DIK_DOWNARROW] & 0x80) // zoom out
 	{
+		if (FOV < XM_PI - 0.2f)
+		{
+			FOV += 1.0f * time;
+			ProjectionMatrix = XMMatrixPerspectiveFovLH(FOV, (FLOAT)fullRect.right / (FLOAT)fullRect.bottom, nearZ, farZ);
 
+			ProjectionMatrixTWO = XMMatrixPerspectiveFovLH(FOV, ((FLOAT)fullRect.right / 4) / ((FLOAT)fullRect.bottom / 4), nearZ, farZ);
+		}
 	}
-	if (keyboardState[DIK_M] & 0x80) // show mouse
+	if (keyboardState[DIK_LSHIFT] & 0x80) // Camera Movement Speed
 	{		
-		
+		speed = 30.0f * time;
 	}
+	else 
+	{
+		speed = 10.0f * time;
+	}
+	if (keyboardState[DIK_F] & 0x80)
+	{
+		fullscreen = !fullscreen;
+		mySwap->SetFullscreenState(fullscreen, NULL);
+		if (fullscreen)
+		{
+			GetWindowRect(GetDesktopWindow(), &fullRect);
+			ProjectionMatrix = XMMatrixPerspectiveFovLH(FOV, (FLOAT)fullRect.right / (FLOAT)fullRect.bottom, nearZ, farZ);
+
+			ProjectionMatrixTWO = XMMatrixPerspectiveFovLH(FOV, ((FLOAT)fullRect.right / 4) / ((FLOAT)fullRect.bottom / 4), nearZ, farZ);
+		}
+		else 
+		{
+			GetClientRect(hWnd, &fullRect);
+			ProjectionMatrix = XMMatrixPerspectiveFovLH(FOV, (FLOAT)fullRect.right / (FLOAT)fullRect.bottom, nearZ, farZ);
+
+			ProjectionMatrixTWO = XMMatrixPerspectiveFovLH(FOV, ((FLOAT)fullRect.right / 4) / ((FLOAT)fullRect.bottom / 4), nearZ, farZ);
+		}
+	}
+
+	if (keyboardState[DIK_J] & 0x80)
+	{
+		if (nearZ > 0.001f)
+		{
+			nearZ -= 10.0f * time;
+			ProjectionMatrix = XMMatrixPerspectiveFovLH(FOV, (FLOAT)fullRect.right / (FLOAT)fullRect.bottom, nearZ, farZ);
+
+			ProjectionMatrixTWO = XMMatrixPerspectiveFovLH(FOV, ((FLOAT)fullRect.right / 4) / ((FLOAT)fullRect.bottom / 4), nearZ, farZ);
+		}
+	}
+	if (keyboardState[DIK_J] & 0x80)
+	{
+		if (nearZ < farZ)
+		{
+			nearZ += 10.0f * time;
+			ProjectionMatrix = XMMatrixPerspectiveFovLH(FOV, (FLOAT)fullRect.right / (FLOAT)fullRect.bottom, nearZ, farZ);
+
+			ProjectionMatrixTWO = XMMatrixPerspectiveFovLH(FOV, ((FLOAT)fullRect.right / 4) / ((FLOAT)fullRect.bottom / 4), nearZ, farZ);
+		}
+	}
+	if (keyboardState[DIK_K] & 0x80)
+	{
+		if (farZ > nearZ)
+		{
+			farZ -= 10.0f * time;
+			ProjectionMatrix = XMMatrixPerspectiveFovLH(FOV, (FLOAT)fullRect.right / (FLOAT)fullRect.bottom, nearZ, farZ);
+
+			ProjectionMatrixTWO = XMMatrixPerspectiveFovLH(FOV, ((FLOAT)fullRect.right / 4) / ((FLOAT)fullRect.bottom / 4), nearZ, farZ);
+		}
+	}
+	if (keyboardState[DIK_I] & 0x80)
+	{
+		if (farZ < 100.0f)
+		{
+			farZ += 10.0f * time;
+			ProjectionMatrix = XMMatrixPerspectiveFovLH(FOV, (FLOAT)fullRect.right / (FLOAT)fullRect.bottom, nearZ, farZ);
+
+			ProjectionMatrixTWO = XMMatrixPerspectiveFovLH(FOV, ((FLOAT)fullRect.right / 4) / ((FLOAT)fullRect.bottom / 4), nearZ, farZ);
+		}
+	}
+
 
 #pragma endregion
 
@@ -839,11 +991,6 @@ void ZeroCameraValues(void)
 {
 	moveZ = moveX = moveY = 0;
 	rotateY = rotateX = 0;
-}
-
-void CreateFrustrum(XMMATRIX view, XMMATRIX proj, float depth)
-{
-
 }
 
 
@@ -931,6 +1078,16 @@ void LoadMesh(const char* meshFileName, My_Mesh& mesh, float size) {
 		mesh.vertexList[i].Pos.y *= size;
 		mesh.vertexList[i].Pos.z *= size;
 
+
+		// NORMALIZE HERE
+		// dot normal against itself (X*X +Y*Y +Z*Z)
+		//square root of squared magnitude to get true magnitude
+		// divide all components by the magnitude
+			mesh.vertexList[i].Normal.x = mesh.vertexList[i].Normal.x / (sqrt((mesh.vertexList[i].Normal.x * mesh.vertexList[i].Normal.x) + (mesh.vertexList[i].Normal.y * mesh.vertexList[i].Normal.y) + (mesh.vertexList[i].Normal.z * mesh.vertexList[i].Normal.z)));
+			mesh.vertexList[i].Normal.y = mesh.vertexList[i].Normal.y / (sqrt((mesh.vertexList[i].Normal.x * mesh.vertexList[i].Normal.x) + (mesh.vertexList[i].Normal.y * mesh.vertexList[i].Normal.y) + (mesh.vertexList[i].Normal.z * mesh.vertexList[i].Normal.z)));
+			mesh.vertexList[i].Normal.z = mesh.vertexList[i].Normal.z / (sqrt((mesh.vertexList[i].Normal.x * mesh.vertexList[i].Normal.x) + (mesh.vertexList[i].Normal.y * mesh.vertexList[i].Normal.y) + (mesh.vertexList[i].Normal.z * mesh.vertexList[i].Normal.z)));
+		
+
 		mesh.vertexList[i].Tex.y = 1.0f - mesh.vertexList[i].Tex.y;
 	}
 
@@ -940,6 +1097,7 @@ void LoadMesh(const char* meshFileName, My_Mesh& mesh, float size) {
 void CleanupDevice()
 {
 	//release all the D3D11 interfaces
+	mySwap->SetFullscreenState(FALSE, NULL);
 	if (myCon) myCon->Release();
 	if (samplLinear) samplLinear->Release();
 	if (textureRV) textureRV->Release();
@@ -964,15 +1122,19 @@ void CleanupDevice()
 	if (pShaderGrass) pShaderGrass->Release();
 	if (vShaderSky) vShaderSky->Release();
 	if (pShaderSky) pShaderSky->Release();
+	if (vShaderGrass) vShaderGrass->Release();
 	if (gShader) gShader->Release();
 	if (depthStencil) depthStencil->Release();
 	if (myRtv) myRtv->Release();
+	if (myRtvTWO) myRtvTWO->Release();
 	if (depthView) depthView->Release();
 	if (cBuf) cBuf->Release();
 	if (lBuf) lBuf->Release();
 	if (instBuf) instBuf->Release();
+	if (tBuf) tBuf->Release();
 	if (myDev) myDev->Release();
 	if (rState) rState->Release();
+	if (bState) bState->Release();
 	if (mySwap) mySwap->Release();
 	if (DirectInput) DirectInput->Release();
 	if (DIKey) DIKey->Unacquire();
@@ -981,8 +1143,6 @@ void CleanupDevice()
 
 void Render()
 {
-	UINT stride = sizeof(My_Vertex);
-	UINT offset = 0;
 	// Update our time
 	static float t = 0.0f;
 	static ULONGLONG timeStart = 0;
@@ -996,7 +1156,6 @@ void Render()
 
 #pragma region Mouse and Keyboard
 	// Moving the view with key and mouse
-	
 	XRotation = XMMatrixRotationX(rotateX);
 	YRotation = XMMatrixRotationY(rotateY);
 
@@ -1009,18 +1168,20 @@ void Render()
 	ViewMatrix.r[3] = pos;
 
 	ZeroCameraValues();
+
 #pragma endregion
 
 	//setting up the pipeline
+
 	ID3D11RenderTargetView* tempRtv[] = { myRtv };
 	myCon->OMSetRenderTargets(1, tempRtv, depthView); // z buffer is the third param remove using nullptr
-	// rasterizer
-	myCon->RSSetViewports(1, &myPort);
+
 	// Input Assembler
 	myCon->IASetInputLayout(vLayout);
 
 	//clear the backbuffer
-	myCon->ClearRenderTargetView(myRtv, Colors::Black);
+	//myCon->ClearRenderTargetView(myRtv, Colors::Black);
+
 
 #pragma region SkyBox
 
@@ -1037,7 +1198,6 @@ void Render()
 	cb1.mProjection = XMMatrixTranspose(ProjectionMatrix);
 	myCon->UpdateSubresource(cBuf, 0, nullptr, &cb1, 0, 0);
 	
-	//cb1.mWorld = XMMatrixTranslationFromVector(ViewMatrix.r[3]);
 	// Set vertex buffer
 	myCon->IASetVertexBuffers(0, 1, &vBufCube, &stride, &offset);
 	// Set index buffer
@@ -1055,7 +1215,6 @@ void Render()
 	myCon->ClearDepthStencilView(depthView, D3D11_CLEAR_DEPTH, 1.0f, 0);
 #pragma endregion
 
-	//Rendering the Shape
 #pragma region Shaders
 
 	//Vertex shader stage
@@ -1086,9 +1245,9 @@ void Render()
 	myCon->DrawInstanced(stump.vertexList.size(), instanceAmount, 0, 0);
 
 
-	//Draw Plane
-	//cb1.mWorld = XMMatrixMultiply(XMMatrixIdentity(), XMMatrixScaling(50.0f, 50.0f, 50.0f));
-	//cb1.mWorld = XMMatrixTranspose(XMMatrixMultiply(cb1.mWorld, XMMatrixTranslation(0.0f, -2.0f, 0.0f)));
+	//Draw Grass
+	//cb1.mWorld = XMMatrixIdentity();
+	////cb1.mWorld = XMMatrixTranspose(XMMatrixTranslationFromVector(2.0 * XMVector3TransformCoord(cb1.mWorld.r[4], XMMatrixRotationY(1.0f * t))));
 	//myCon->UpdateSubresource(cBuf, 0, nullptr, &cb1, 0, 0);
 	//myCon->PSSetShader(pShaderGrass, nullptr, 0);
 	//myCon->PSSetConstantBuffers(0, 1, &lBuf);
@@ -1141,7 +1300,7 @@ void Render()
 	};
 
 	// Rotate the second light around the origin
-	XMMATRIX mRotate = XMMatrixRotationY(1.0f * t);
+	XMMATRIX mRotate = XMMatrixRotationY(1.0f * 1);
 	XMVECTOR vLightPos1 = XMLoadFloat4(&vLightPos[1]);
 	vLightPos1 = XMVector3TransformCoord(vLightPos1, mRotate);  // XMVector3TransformCoord(vLightDir, mRotate); // for pos
 	XMStoreFloat4(&vLightPos[1], vLightPos1);
@@ -1155,6 +1314,7 @@ void Render()
 	mLight = mLightScale * mLight;
 	   	
 	cb1.mWorld = XMMatrixTranspose(mLight);
+
 	myCon->UpdateSubresource(cBuf, 0, nullptr, &cb1, 0, 0);
 
 	LightBuffer lb1 = {};
@@ -1175,13 +1335,17 @@ void Render()
 	lb1.innerConeRatio = 0.95f;
 	lb1.outerConeRatio = 0.8f;
 
+	TimeBuffer tb1 = {};
+	tb1.padding = XMFLOAT3(pos.m128_f32[0], pos.m128_f32[1], pos.m128_f32[2]);
+
 	myCon->UpdateSubresource(lBuf, 0, nullptr, &lb1, 0, 0);
+	myCon->UpdateSubresource(tBuf, 0, nullptr, &tb1, 0, 0);
 	//Vertex shader stage
 	myCon->VSSetShader(vShaderSky, nullptr, 0);
 	myCon->VSSetConstantBuffers(0, 1, &cBuf);
 	myCon->PSSetShaderResources(0, 1, &textureSky);
 	myCon->PSSetShader(pShaderSpec, nullptr, 0);
-	myCon->PSSetConstantBuffers(0, 1, &lBuf);
+	myCon->PSSetConstantBuffers(0, 1, &tBuf);
 
 	//Draw Model
 	// Set vertex buffer
@@ -1192,7 +1356,206 @@ void Render()
 
 #pragma endregion
 
-	// presents the back buffer to the front buffer and should always be last
-	mySwap->Present(0, 0);
+}
+
+void RenderTWO()
+{
+	// Update our time
+	static float t = 0.0f;
+	static ULONGLONG timeStart = 0;
+	ULONGLONG timeCur = GetTickCount64();
+	if (timeStart == 0)
+		timeStart = timeCur;
+	t = (timeCur - timeStart) / 1000.0f;
+
+	// Set primitive topology
+	myCon->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+
+#pragma region Mouse and Keyboard
+
+	// Initialize the view matrix
+	//XMMATRIX translation = XMMatrixTranslation(moveX, moveY, moveZ);
+	//ViewMatrix = XMMatrixMultiply(translation, ViewMatrix);
+
+	//ZeroCameraValues();
+
+#pragma endregion
+
+	//setting up the pipeline
+	ID3D11RenderTargetView* tempRtv[] = { myRtvTWO };
+	myCon->OMSetRenderTargets(1, tempRtv, depthView); // z buffer is the third param remove using nullptr
+
+	// Input Assembler
+	myCon->IASetInputLayout(vLayout);
+
+	//clear the backbuffer
+	//myCon->ClearRenderTargetView(myRtv, Colors::Black);
+
+
+#pragma region SkyBox
+
+	//clear the depth buffer to max depth (1.0)
+	myCon->ClearDepthStencilView(depthView, D3D11_CLEAR_DEPTH, 1.0f, 0);
+
+	XMMATRIX scaled = XMMatrixScaling(scaleBy, scaleBy, scaleBy);
+	XMVECTOR Eye = XMVectorSet(0.0f, 10.0f, -10.0f, 0.0f);
+	XMVECTOR At = XMVectorSet(0.0f, 0.0f, 1.0f, 0.0f);
+	XMVECTOR Up = XMVectorSet(0.0f, 0.0f, 1.0f, 0.0f);
+
+	// Update matrix variables for the Constant buffer
+	ConstantBuffer cb1;
+	cb1.mWorld = XMMatrixTranspose(XMMatrixMultiply(XMMatrixIdentity(), scaled)); // translate with view.xyz
+	cb1.mView = XMMatrixTranspose(XMMatrixLookAtLH(Eye, At, Up));
+	cb1.mProjection = XMMatrixTranspose(ProjectionMatrixTWO);
+	myCon->UpdateSubresource(cBuf, 0, nullptr, &cb1, 0, 0);
+
+	// Set vertex buffer
+	myCon->IASetVertexBuffers(0, 1, &vBufCube, &stride, &offset);
+	// Set index buffer
+	myCon->IASetIndexBuffer(iBufCube, DXGI_FORMAT_R32_UINT, 0);
+
+	myCon->VSSetShader(vShaderSky, nullptr, 0);
+	myCon->VSSetConstantBuffers(0, 1, &cBuf);
+	myCon->PSSetShader(pShaderSky, nullptr, 0);
+	myCon->PSSetShaderResources(0, 1, &textureSky);
+	myCon->PSSetSamplers(0, 1, &samplLinear);
+
+	myCon->DrawIndexed(SkyCube.indicesList.size(), 0, 0);
+
+
+	myCon->ClearDepthStencilView(depthView, D3D11_CLEAR_DEPTH, 1.0f, 0);
+#pragma endregion
+
+#pragma region Shaders
+
+	//Vertex shader stage
+	myCon->VSSetShader(vShader, nullptr, 0);
+	myCon->VSSetConstantBuffers(0, 1, &cBuf);
+	myCon->VSSetConstantBuffers(1, 1, &instBuf);
+
+	//Pixel Shader Stage
+	myCon->PSSetShader(pShaderSpecular, nullptr, 0);
+	myCon->PSSetConstantBuffers(0, 1, &lBuf);
+
+	//Texture Stage
+	myCon->PSSetShaderResources(0, 1, &textureRV);
+	myCon->PSSetShaderResources(1, 1, &textureRVAO);
+	myCon->PSSetShaderResources(2, 1, &textureRVNM);
+	myCon->PSSetSamplers(0, 1, &samplLinear);
+
+#pragma endregion
+
+#pragma region Draw Models
+
+	//Draw Stump
+	// Set vertex buffer
+	myCon->IASetVertexBuffers(0, 1, &vBuf, &stride, &offset);
+	// Set index buffer
+	myCon->IASetIndexBuffer(iBuf, DXGI_FORMAT_R32_UINT, 0);
+
+	//myCon->DrawInstanced(stump.vertexList.size(), instanceAmount, 0, 0);
+
+
+	//Draw Grass
+	cb1.mWorld = XMMatrixIdentity();
+	TimeBuffer tBuffer = {};
+	tBuffer.time = t;
+	myCon->UpdateSubresource(cBuf, 0, nullptr, &cb1, 0, 0);
+	myCon->UpdateSubresource(tBuf, 0, nullptr, &tBuffer, 0, 0);
+	myCon->VSSetShader(vShaderGrass, nullptr, 0);
+	myCon->VSSetConstantBuffers(0, 1, &cBuf);
+	myCon->VSSetConstantBuffers(1, 1, &tBuf);
+	myCon->PSSetShader(pShaderGrass, nullptr, 0);
+	myCon->PSSetConstantBuffers(0, 1, &lBuf);
+	myCon->PSSetShaderResources(0, 1, &textureGrass);
+	myCon->PSSetSamplers(0, 1, &samplLinear);
+
+	myCon->IASetVertexBuffers(0, 1, &vBufGrassPlane, &stride, &offset);
+	myCon->IASetIndexBuffer(iBufGrassPlane, DXGI_FORMAT_R32_UINT, 0);
+	myCon->DrawIndexed(GrassPlane.indicesList.size(), 0, 0);
+
+#pragma endregion
+
+
+#pragma region Lights
+
+	const int numLights = 4;
+	// temp light and colors
+	XMFLOAT4 vLightDirs[numLights] =
+	{
+		XMFLOAT4(0.0f, 0.0f, -1.0f, 1.0f),
+		XMFLOAT4(0.0f, -0.5f, 0.0f, 1.0f),
+	};
+	XMFLOAT4 vLightColors[numLights] =
+	{
+		XMFLOAT4(Colors::Green),
+		XMFLOAT4(Colors::Yellow),
+		XMFLOAT4(Colors::Red),
+		XMFLOAT4(Colors::Blue),
+	};
+
+	XMFLOAT4 vLightPos[numLights] =
+	{
+		XMFLOAT4(0.0f, 0.0f, -1.0f, 1.0f),
+		XMFLOAT4(-0.5f, 2.0f, 0.5f, 1.0f),
+	};
+
+	// Rotate the second light around the origin
+	XMMATRIX mRotate = XMMatrixRotationY(1.0f * t);
+	XMVECTOR vLightPos1 = XMLoadFloat4(&vLightPos[1]);
+	vLightPos1 = XMVector3TransformCoord(vLightPos1, mRotate);  // XMVector3TransformCoord(vLightDir, mRotate); // for pos
+	XMStoreFloat4(&vLightPos[1], vLightPos1);
+
+	vLightDirs[0].x *= sin(t * 1.0f);
+	vLightColors[0].y *= cos(t * 1.0f);
+
+	// Update matrix vars for the Light Buffer
+	XMMATRIX mLight = XMMatrixTranslationFromVector(2.0f * XMLoadFloat4(&vLightPos[1]));
+	XMMATRIX mLightScale = XMMatrixScaling(5.0f, 5.0f, 5.0f);
+	mLight = mLightScale * mLight;
+
+	cb1.mWorld = XMMatrixTranspose(mLight);
+
+	myCon->UpdateSubresource(cBuf, 0, nullptr, &cb1, 0, 0);
+
+	LightBuffer lb1 = {};
+	lb1.lightPos.x = mLight.r[3].m128_f32[0];
+	lb1.lightPos.y = mLight.r[3].m128_f32[1];
+	lb1.lightPos.z = mLight.r[3].m128_f32[2];
+	lb1.lightPos.w = mLight.r[3].m128_f32[3];
+
+	lb1.lightDir[0] = vLightDirs[0];
+	lb1.lightDir[1] = vLightDirs[1];
+	lb1.lightColor[0] = vLightColors[0];
+	lb1.lightColor[1] = vLightColors[1];
+	lb1.lightColor[2] = vLightColors[2];
+	lb1.lightColor[3] = vLightColors[3];
+	lb1.lightRadius = 100.0f;
+	lb1.coneSize = 2.0f;
+	lb1.coneDir = vLightDirs[1];
+	lb1.innerConeRatio = 0.95f;
+	lb1.outerConeRatio = 0.8f;
+
+	TimeBuffer tb1 = {};
+	tb1.padding = XMFLOAT3(ViewMatrix.r[3].m128_f32[0], ViewMatrix.r[3].m128_f32[1], ViewMatrix.r[3].m128_f32[2]);
+
+	myCon->UpdateSubresource(lBuf, 0, nullptr, &lb1, 0, 0);
+	myCon->UpdateSubresource(tBuf, 0, nullptr, &tb1, 0, 0);
+	//Vertex shader stage
+	myCon->VSSetShader(vShaderSky, nullptr, 0);
+	myCon->VSSetConstantBuffers(0, 1, &cBuf);
+	myCon->PSSetShaderResources(0, 1, &textureSky);
+	myCon->PSSetShader(pShaderSpec, nullptr, 0);
+	myCon->PSSetConstantBuffers(0, 1, &tBuf);
+
+	//Draw Model
+	// Set vertex buffer
+	myCon->IASetVertexBuffers(0, 1, &vBufLight, &stride, &offset);
+	// Set index buffer
+	myCon->IASetIndexBuffer(iBufLight, DXGI_FORMAT_R32_UINT, 0);
+	myCon->DrawIndexed(lightBulb.indicesList.size(), 0, 0);
+
+#pragma endregion
 
 }
+

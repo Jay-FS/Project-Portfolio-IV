@@ -16,7 +16,7 @@ struct PS_INPUT
 float4 main(PS_INPUT input) : SV_TARGET
 {
     float4 finalColor = (float4) 0;
-    finalColor = txDiffuse.Sample(samLinear, input.Tex.xyz) * 0.2f;
+    finalColor = txDiffuse.Sample(samLinear, input.Tex.xyz) * 0.9f;
     //float3 lerped = lerp(); // lerp with world position
     return finalColor ;
 

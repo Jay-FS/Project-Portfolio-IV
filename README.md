@@ -16,3 +16,11 @@ specular is on the tree stumps
 THEME
 
 deforestation
+
+f to go to toggle fullscreen
+
+multithreading done in PPIV.cpp line 548
+i and k for farz plane
+j and l for near z plane
+
+normalized meshs

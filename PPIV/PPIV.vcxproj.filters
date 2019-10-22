@@ -63,5 +63,6 @@
     <FxCompile Include="SpecularCorrect.hlsl" />
     <FxCompile Include="PointToQuad.hlsl" />
     <FxCompile Include="RenderToTexture.hlsl" />
+    <FxCompile Include="WavingGrassVS.hlsl" />
   </ItemGroup>
 </Project>

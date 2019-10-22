@@ -18,7 +18,6 @@ struct VS_INPUT
 	float2 Tex : TEXCOORD0;
     float4 Tan : TANGENT;
     float4 Binorm : BINORMAL;
-
 };
 
 struct VS_OUTPUT
@@ -30,6 +29,7 @@ struct VS_OUTPUT
     float4 Tan : TANGENT;
     float4 Binorm : BINORMAL;
 };
+
 VS_OUTPUT main(VS_INPUT input, uint instanceId : SV_InstanceID)
 {
 	VS_OUTPUT output = (VS_OUTPUT)0;
